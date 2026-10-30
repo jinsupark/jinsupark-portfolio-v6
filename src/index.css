@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', monospace;
+}
+
+/* Tailwind v4's preflight resets buttons to the default arrow. */
+@layer base {
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/geist-variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./assets/fonts/geist-mono-variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+html,
+body {
+  @apply bg-neutral-100 font-sans text-neutral-900 antialiased;
+}

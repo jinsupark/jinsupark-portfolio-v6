@@ -1,0 +1,19 @@
+# Normalise every text file to LF in the repository.
+#
+# Before this existed, HEAD held a mix — 15 files CRLF, 44 LF — because files
+# arrived from different editors and nothing reconciled them. The cost isn't
+# aesthetic: running Prettier across `src` rewrote the endings of files it had no
+# other reason to touch, producing whitespace-only diffs on a dozen components
+# and burying the handful of real edits among them. Committing this is a one-time
+# normalisation; after that a formatter can only change what it means to change.
+* text=auto eol=lf
+
+# Binary assets, so git never inspects or rewrites their bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.mp4 binary
+*.mp3 binary
+*.woff2 binary
+*.ico binary
