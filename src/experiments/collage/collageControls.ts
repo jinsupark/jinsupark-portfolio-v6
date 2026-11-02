@@ -1,0 +1,60 @@
+import { color, createControls, range, toggle } from '@/lab/controls';
+
+export const collageControls = createControls('collage-v2', {
+  seed: range('Composition', 4, 1, 999, 1),
+  pieces: range('Composition', 60, 1, 120, 1),
+  stripShare: range('Composition', 0.6, 0, 1, 0.01, 'strips'),
+  cutoutShare: range('Composition', 0.16, 0, 1, 0.01, 'scissor cut-outs'),
+  sizeMin: range('Composition', 0.14, 0.03, 1, 0.01, 'sheet min'),
+  sizeMax: range('Composition', 0.5, 0.05, 1.2, 0.01, 'sheet max'),
+  columns: range('Composition', 7, 1, 20, 1),
+  snap: range('Composition', 0.7, 0, 1, 0.01, 'snap to columns'),
+  tilt: range('Composition', 2.5, 0, 20, 0.1, 'tilt °'),
+
+  speed: range('Motion', 1, 0, 4, 0.05),
+  pasteEvery: range('Motion', 1.8, 0.1, 10, 0.05, 'paste every s'),
+  pasteDur: range('Motion', 0.8, 0.1, 3, 0.05, 'paste s'),
+  autoRip: toggle('Motion', true, 'rip old pieces'),
+  ripDur: range('Motion', 0.7, 0.1, 3, 0.05, 'rip s'),
+  residue: range('Motion', 0.75, 0, 1, 0.01, 'leave scrap'),
+  paused: toggle('Motion', false),
+
+  wall: color('Paper', '#dcdcda'),
+  grain: range('Paper', 0.28, 0, 1, 0.01),
+  stain: range('Paper', 0.08, 0, 1, 0.01),
+  shadow: range('Paper', 0.28, 0, 1, 0.01),
+  shadowBlur: range('Paper', 5, 0, 30, 0.5, 'shadow blur'),
+  lift: range('Paper', 14, 0, 60, 1, 'paste lift'),
+
+  tornShare: range('Tear', 0.45, 0, 1, 0.01, 'torn edges'),
+  rough: range('Tear', 3.5, 0, 16, 0.1, 'roughness'),
+  roughFreq: range('Tear', 0.09, 0.01, 0.5, 0.005, 'frequency'),
+  band: range('Tear', 2.6, 0, 12, 0.1, 'core width'),
+  kraftShare: range('Tear', 0.3, 0, 1, 0.01, 'cardboard core'),
+  core: color('Tear', '#f8f5ee', 'core'),
+  kraft: color('Tear', '#a8845a', 'cardboard'),
+
+  orange: color('Palette', '#ff6b1c'),
+  cobalt: color('Palette', '#1f73f0'),
+  violet: color('Palette', '#6b4cf2'),
+  pink: color('Palette', '#f5a8e6'),
+  coral: color('Palette', '#ff5a52'),
+  sky: color('Palette', '#35a6e8'),
+  yellow: color('Palette', '#ffc83a'),
+  green: color('Palette', '#2fb35c'),
+  black: color('Palette', '#141414'),
+  cream: color('Palette', '#f0d9b6'),
+  textInk: color('Palette', '#2c4a48', 'text ink'),
+
+  colorShare: range('Prints', 0.8, 0, 1, 0.01, 'coloured paper'),
+  gradientShare: range('Prints', 0.18, 0, 1, 0.01, 'gradient'),
+  halftoneShare: range('Prints', 0.16, 0, 1, 0.01, 'halftone'),
+  scribbleShare: range('Prints', 0.08, 0, 1, 0.01, 'scribble'),
+  geoShare: range('Prints', 0.18, 0, 1, 0.01, 'geometric'),
+  typeShare: range('Prints', 0.05, 0, 1, 0.01, 'printed text'),
+  rulerShare: range('Prints', 0.015, 0, 1, 0.005, 'notched strips'),
+  drawingShare: range('Prints', 0.04, 0, 1, 0.01, 'tracing paper'),
+  imageShare: range('Prints', 0.04, 0, 1, 0.01, 'project scraps'),
+});
+
+export type CollageValues = typeof collageControls.values;

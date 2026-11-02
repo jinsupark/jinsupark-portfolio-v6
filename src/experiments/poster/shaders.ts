@@ -215,6 +215,8 @@ export const wallFrag = /* glsl */ `
 
   uniform vec4 uCell[MAXL];  // atlas uv offset xy, size zw
   uniform vec4 uCover[MAXL]; // image uv scale xy, offset zw
+  uniform sampler2D uVideo;
+  uniform float uIsVideo[MAXL];
 
   float sheetIn(int i, vec2 p) {
     return 1.0 - smoothstep(-uPixel, uPixel, sheetDist(i, p));
@@ -318,8 +320,16 @@ export const wallFrag = /* glsl */ `
     vec2 scale = uCover[i].xy * uCell[i].zw / (2.0 * inner);
     // Keep clear of the neighbouring cell when the mip filter reaches across.
     vec2 cuv = clamp(iuv * uCover[i].xy + uCover[i].zw, vec2(0.004), vec2(0.996));
-    vec3 c = textureGrad(uAtlas, uCell[i].xy + cuv * uCell[i].zw,
-                         toSheetDir(i, dpdx) * scale, toSheetDir(i, dpdy) * scale).rgb;
+    vec3 c;
+    // The video is its own texture, so the sheet samples it whole rather than
+    // through an atlas cell.
+    if (uIsVideo[i] > 0.5) {
+      vec2 vs = uCover[i].xy / (2.0 * inner);
+      c = textureGrad(uVideo, cuv, toSheetDir(i, dpdx) * vs, toSheetDir(i, dpdy) * vs).rgb;
+    } else {
+      c = textureGrad(uAtlas, uCell[i].xy + cuv * uCell[i].zw,
+                      toSheetDir(i, dpdx) * scale, toSheetDir(i, dpdy) * scale).rgb;
+    }
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
     c = max(mix(vec3(l), c, uSaturation), 0.0);
     return mix(c, vec3(1.0), uFade);

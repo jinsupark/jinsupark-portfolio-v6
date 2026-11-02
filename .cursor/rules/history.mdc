@@ -1,0 +1,141 @@
+---
+description: Portfolio v6 history — decisions, bugs already paid for, and how each experiment was tuned. Read before changing an experiment, the studio, the compositor or the shape system, or when a WebGL colour, screenshot or build check looks wrong.
+alwaysApply: false
+---
+
+# Portfolio v6 — History and lessons
+
+> Current architecture is in `architecture.mdc`. This is the log: what was
+> tried, what broke and why, so the same ground isn't re-broken. Entries about
+> code that no longer exists stay only while the mistake is still reachable.
+
+## What v6 is
+A gallery of composed artworks. It grew out of v5 (the collage room), and takes
+v5's project screenshots (`src/assets/projects/`, `src/data/projectImages.ts`)
+but none of its room. Every experiment is built **from a reference image Jin
+supplies**: a mock, a photo or a screenshot of an effect. The job is to reproduce
+that image's look, then expose the feel-tunables in a tilde panel.
+
+## Experiments, and what each one taught
+
+Which ones are studio layers: grid, blueprint, terminal, paths, scatter,
+cursors, collage and map (`studio/registry.ts`). **Poster, glass, droplet and
+cloud are page-only.** They own a three.js scene and need porting to the
+compositor's shared renderer first (deferred; see `architecture.mdc`).
+
+- **Collage.** Torn paper pasted down piece by piece, with click-to-rip. The
+ palette went vivid on a reference (orange, cobalt, violet, pink, coral, sky,
+ yellow, green). The store was renamed `collage-v2` so old saved tuning
+ couldn't drag the new palette back. ~96% of pieces are generated prints
+ (`prints.ts`): colour, gradient, halftone dot screen or speckle, scribble,
+ geometry, type, ruler and drawing. Only `imageShare` (0.04) uses real images:
+ first screenshots of the hand-kept brand/art list in
+ `terminal/imagePool.ts` (product UI excluded on purpose). Scraps left by a rip
+ go back in at the ripped sheet's stack index, not on top.
+- **City map.** Line-drawn streets with dotted walking routes. Routes first
+ **stacked on one avenue**. Fixed by rejecting a candidate path that runs within
+ 5× dot size of existing dots (`crowded`) and dropping the road share to 0.3.
+- **Water drops (droplet).** Draw a shape and it becomes refracting water. The
+ mask is drawn at 0.5 scale, blurred twice into a HalfFloat target, and the
+ water shader reads its gradient as the surface normal. The first caustic read
+ as a **white halo**, fixed with caustics .6 → .2 and shadow .5 → .6. ⌘Z undoes
+ the last stroke.
+- **Cloud timelapse.** A woodblock cumulus that boils in place. v1 read as
+ **stacked balls with a thick white band, too dark, with floating lobes**:
+ - Too dark: the colour-space bug below.
+ - Balls: replaced by a soft-max height blend across lobes, plus fbm normal
+ perturbation.
+ - White band: fixed in the lace threshold.
+ - Floating lobes: lobes now rise from a skeleton column of four base lobes.
+- Earlier ones (poster, grid, terminal, glass, blueprint, paths, scatter,
+ cursors) predate this log. Their pages and controls are the record.
+
+## Bugs already paid for
+
+- **WebGL colours came out dark.** The renderer's `outputColorSpace` is
+ Linear, and a `THREE.Color` set from a hex string gets converted
+ sRGB → linear. Colour uniforms must use
+ `color.setStyle(hex, THREE.LinearSRGBColorSpace)` so the hex passes through
+ as written. It bit the cloud and the droplet; check any new three.js
+ experiment for it. Canvas textures are left at their default colour space so
+ their pixels also pass straight through. The compositor does the same,
+ keeping sRGB values throughout so blend modes behave like a design tool's.
+- **Renderers must take values as arguments**, never read a store's `.values`.
+ Otherwise retuning an experiment page silently changes saved artworks.
+ `glassRenderer` still violates this (noted in `architecture.mdc`).
+- **The shape shader can't early-return.** `fwidth` needs uniform control flow,
+ and `LAYER_FRAG` uses it for antialiasing every distance-field edge.
+- **Shape styles get clipped without room.** Node path's stickers and labels
+ reach past the outline, so a shape style renders with an extra `STYLE_PAD` (90)
+ beyond the edge pad. Its first render cut the stickers off at the frame.
+- **Samplers need a real texture even when unused.** A plain-rectangle layer
+ never reads its field or boolean samplers, but they're still bound to a 1×1
+ `blank` texture.
+
+## Workflow traps
+
+- **Run the checks separately, never as `prettier && tsc && eslint`.** When
+ Prettier fails to parse a file it exits non-zero and the chain silently skips
+ type-check and lint. A duplicated line shipped to the dev server that way
+ while the checks looked clean.
+- **Prettier rewrites code an edit is anchored to.** After `npx prettier
+ --write src`, re-read before the next StrReplace.
+- **Vite's error overlay replays stale errors into screenshots.** A fresh
+ headless page can show an error that's already fixed. Remove
+ `vite-error-overlay` in `PRE`/`EVAL` before judging a shot.
+- **Screenshot tooling** (`scripts/shoot.mjs`). It needs to run outside the
+ sandbox (Chrome). Env vars:
+ - `STORE` seeds one localStorage key, e.g. a studio draft at `studio:draft:`.
+ - `PRE` runs before the drag, e.g. to pick a tool:
+ `dispatchEvent(new KeyboardEvent("keydown",{key:"s"}))`.
+ - `EVAL` runs after the drag, before the shot.
+ - The tilde panel can be hidden with a `` ` `` keydown.
+
+ Window-dispatched key events have no element target, so key handlers guard
+ with `typing()` from `studio/tools.ts`.
+- **Fast refresh:** a component file may only export components. Shared tool
+ types and helpers live in `studio/tools.ts` for that reason.
+- **The react-hooks lint rule flags ref access in render-time callbacks.** That
+ includes handlers created inside a `.map` that reach a ref. Get the element
+ from the event instead (`e.currentTarget.ownerSVGElement`).
+
+## The studio became a shape tool (Nov 2026)
+Jin wanted to stop going back and forth between experiments and works. Layers
+became **shapes filled with a shader**, with experiments renamed "shaders" in
+the UI. The plan, in agreed order:
+1. Shapes, freeform drawing, vertex editing, smear, solid/gradient/shader fills
+ and edge effects (paper rip, stroke, feather, shadow). Done.
+2. Node path as a shape style. Done.
+3. Booleans (unify, intersect, subtract, exclude). Done.
+4. Liquify: a smear brush for any layer's pixels, not just outlines.
+5. The WebGL shaders (cloud, glass, poster, and droplet as a surface effect
+ refracting the layers below) on the compositor's shared renderer.
+
+The key design decision was **one signed distance field per shape**, rather
+than canvas clipping plus separate effect passes. Tear, paper core, stroke,
+feather, shadow and booleans all read the same distance, so they compose for
+free. A stroke follows the torn edge; a shadow is the torn, combined shape
+offset. A layer with no shape is an exact analytic rectangle, so artworks
+saved before shapes existed render as before (verified on `field-notes`).
+
+## Open questions from design talks
+- **Raised text on the site** (neumorphism, from a Figma mock): feasible with
+ `text-shadow` alone. The open issue is readability. Ground-coloured text has
+ near-zero contrast, so body copy wants a slightly darker fill than the
+ headline.
+- **Water drops across the real page.** WebGL can't read DOM pixels.
+ - `backdrop-filter: url(#svg-filter)` with a displacement map bends the live
+ page, but only in Chromium.
+ - Safari/Firefox would need `filter: url()` on the page wrapper with one
+ page-sized map: costly on iOS, and the drops scroll with the content.
+
+ Not built; a side-by-side test page in Safari was the proposed next step.
+
+## Jin's preferences
+- Brings references as images and expects the look matched, then tunes it
+ himself in a tilde panel. Build the panel rather than guessing at constants.
+- Verify visual work by screenshot, and look at the shot before reporting.
+- Wants to understand *why* before something is built, and appreciates
+ TypeScript explanations.
+- Aesthetic: printed matter, paper and woodblock textures, technical drawing,
+ monospace small caps. Vivid colour only where a reference asks for it.

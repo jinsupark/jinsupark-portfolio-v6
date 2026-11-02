@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PROJECTS, type ImageLoader } from '@/data/projectImages';
+import { DemoVideos } from '@/lab/demoVideo';
 import { seededRng } from '@/lab/random';
 import { FORMATS, type PosterValues } from './posterControls';
 import {
@@ -103,6 +104,7 @@ type Sheet = {
   ry: number;
   rs: number;
   ra: number;
+  vid: number; // printed with the video when below `videoShare`
 };
 
 function shuffle<T>(arr: T[], rng: () => number) {
@@ -123,6 +125,8 @@ function deal(seed: number, count: number): Sheet[] {
     Array.from({ length: count }, (_, i) => i),
     rng,
   );
+  // Its own stream, so adding it didn't reshuffle every existing wall.
+  const vrng = seededRng(seed * 31 + 5);
   return Array.from({ length: count }, (_, i) => {
     const p = pool[i % pool.length];
     const shot = Math.floor(rng() * p.images.length);
@@ -134,6 +138,7 @@ function deal(seed: number, count: number): Sheet[] {
       ry: rng() - 0.5,
       rs: rng() * 2 - 1,
       ra: rng() * 2 - 1,
+      vid: vrng(),
     };
   });
 }
@@ -252,6 +257,13 @@ export class PosterRenderer {
   ]);
   private front = this.masks.map(() => 0);
   private atlas = new Atlas();
+  private videos = new DemoVideos();
+  private video = this.videos.get(0);
+  private videoTex = (() => {
+    const t = new THREE.VideoTexture(this.video);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
   private sheets: Sheet[] = [];
   private dealt = '';
   private camera = new THREE.Camera();
@@ -313,6 +325,8 @@ export class PosterRenderer {
       uRot: { value: this.rots },
       uCell: { value: vec4s() },
       uCover: { value: vec4s() },
+      uVideo: { value: this.videoTex },
+      uIsVideo: { value: new Array<number>(MAX_SHEETS).fill(0) },
       uBorder: { value: 0 },
       uAspect: { value: 1 },
       uPixel: { value: 0.001 },
@@ -390,6 +404,7 @@ export class PosterRenderer {
     const fmt = FORMATS[v.format];
     const u = this.wall.uniforms;
     const n = this.sheets.length;
+    const vidReady = DemoVideos.ready(this.video);
     const cols = Math.max(1, Math.round(Math.sqrt(n * aspect)));
     const rows = Math.ceil(n / cols);
     const W = aspect * v.spread;
@@ -400,7 +415,11 @@ export class PosterRenderer {
       const inRow = row === rows - 1 ? n - cols * (rows - 1) : cols;
       const cw = W / inRow;
       const col = s.cell - row * cols;
-      const imgAspect = this.atlas.aspect(i);
+      const isVideo = vidReady && s.vid < v.videoShare;
+      u.uIsVideo.value[i] = isVideo ? 1 : 0;
+      const imgAspect = isVideo
+        ? this.video.videoWidth / this.video.videoHeight
+        : this.atlas.aspect(i);
       const sheetAspect = fmt ?? imgAspect;
       const cover = Math.max(ch, cw / sheetAspect);
       const h = (cover * v.scale * Math.max(0.2, 1 + s.rs * v.sizeJitter)) / 2;
@@ -489,6 +508,8 @@ export class PosterRenderer {
     this.base.forEach((t) => t.dispose());
     this.copy.dispose();
     this.atlas.dispose();
+    this.videoTex.dispose();
+    this.videos.dispose();
     this.paint.dispose();
     this.wall.dispose();
   }

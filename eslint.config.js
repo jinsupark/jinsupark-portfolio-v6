@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint';
 import { defineConfig, globalIgnores } from 'eslint/config';
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'src/routeTree.gen.ts']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -25,5 +25,11 @@ export default defineConfig([
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
     },
+  },
+  {
+    // A route file exports its `Route` beside its component by design; the
+    // router plugin's code splitting is what keeps fast refresh working there.
+    files: ['src/routes/**/*.tsx'],
+    rules: { 'react-refresh/only-export-components': 'off' },
   },
 ]);

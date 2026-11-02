@@ -32,6 +32,9 @@ export const posterControls = createControls('poster-v2', {
   spread: range('Scene', 1, 0.2, 1.4, 0.01),
   tilt: range('Scene', 3, 0, 15, 0.1, 'tilt°'),
   border: range('Scene', 0.02, 0, 0.12, 0.001),
+  // Sheets printed with the demo loop instead of a project still. They tear,
+  // crease and shade like any other sheet; only the ink moves.
+  videoShare: range('Scene', 0.4, 0, 1, 0.01, 'video posters'),
 
   paperColor: color('Paper', '#f2eee6', 'paper'),
   grainAmt: range('Paper', 0.12, 0, 2, 0.01, 'grain'),

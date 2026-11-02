@@ -17,8 +17,9 @@ export type SelectControl = Base & {
   value: string;
   options: { value: string; label: string }[];
 };
+export type TextControl = Base & { kind: 'text'; value: string };
 export type Control =
-  RangeControl | ColorControl | ToggleControl | SelectControl;
+  RangeControl | ColorControl | ToggleControl | SelectControl | TextControl;
 export type Schema = Record<string, Control>;
 export type Values<S extends Schema> = { [K in keyof S]: S[K]['value'] };
 
@@ -57,54 +58,89 @@ export const select = (
   label?: string,
 ): SelectControl => ({ kind: 'select', group, value, options, label });
 
+export const text = (
+  group: string,
+  value: string,
+  label?: string,
+): TextControl => ({ kind: 'text', group, value, label });
+
 export type ControlStore<S extends Schema> = {
   id: string;
   schema: S;
   values: Values<S>;
+  defaults(): Values<S>;
+  // Dev server only: writes the current values to `src/lab/presets/<id>.json`.
+  saveDefaults(): Promise<void>;
   set<K extends keyof S>(key: K, value: S[K]['value']): void;
   reset(group?: string): void;
   subscribe(listener: () => void): () => void;
   getSnapshot(): Values<S>;
 };
 
-function defaultsOf<S extends Schema>(schema: S): Values<S> {
+export function defaultsOf<S extends Schema>(schema: S): Values<S> {
   const out: Record<string, unknown> = {};
   for (const k in schema) out[k] = schema[k].value;
   return out as Values<S>;
 }
 
-// Stored values are only trusted where they still fit the schema: a renamed key
+// Saved values are only trusted where they still fit the schema: a renamed key
 // is dropped, and a value of the wrong type or outside a narrowed range falls
 // back to the default rather than putting the scene somewhere unreachable.
+export function fit<S extends Schema>(
+  raw: Record<string, unknown>,
+  schema: S,
+): Partial<Values<S>> {
+  const out: Record<string, unknown> = {};
+  for (const k in schema) {
+    const c = schema[k];
+    const v = raw[k];
+    if (typeof v !== typeof c.value) continue;
+    if (c.kind === 'range' && ((v as number) < c.min || (v as number) > c.max))
+      continue;
+    if (c.kind === 'select' && !c.options.some((o) => o.value === v)) continue;
+    out[k] = v;
+  }
+  return out as Partial<Values<S>>;
+}
+
 function load<S extends Schema>(id: string, schema: S): Partial<Values<S>> {
   try {
-    const raw = JSON.parse(localStorage.getItem(`lab:${id}`) ?? '{}');
-    const out: Record<string, unknown> = {};
-    for (const k in schema) {
-      const c = schema[k];
-      const v = raw[k];
-      if (typeof v !== typeof c.value) continue;
-      if (c.kind === 'range' && (v < c.min || v > c.max)) continue;
-      if (c.kind === 'select' && !c.options.some((o) => o.value === v))
-        continue;
-      out[k] = v;
-    }
-    return out as Partial<Values<S>>;
+    return fit(JSON.parse(localStorage.getItem(`lab:${id}`) ?? '{}'), schema);
   } catch {
     return {};
   }
 }
 
+// Presets committed by the panel's "Save defaults" (dev only, see
+// `vite.config.ts`). A preset overrides the schema's defaults, so it's what a
+// fresh browser, the deployed site and "Reset" all land on.
+const PRESETS = import.meta.glob<Record<string, unknown>>('./presets/*.json', {
+  eager: true,
+  import: 'default',
+});
+const presetOf = (id: string) => PRESETS[`./presets/${id}.json`] ?? {};
+
 export function createControls<S extends Schema>(
   id: string,
   schema: S,
 ): ControlStore<S> {
-  const defaults = defaultsOf(schema);
+  let defaults = { ...defaultsOf(schema), ...fit(presetOf(id), schema) };
   const listeners = new Set<() => void>();
   const store: ControlStore<S> = {
     id,
     schema,
     values: { ...defaults, ...load(id, schema) },
+    defaults: () => defaults,
+    async saveDefaults() {
+      const res = await fetch('/__lab/preset', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, values: store.values }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      defaults = { ...store.values };
+      emit();
+    },
     set(key, value) {
       store.values = { ...store.values, [key]: value };
       emit();

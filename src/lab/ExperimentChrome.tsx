@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 
 // The label every experiment wears: where you are, and how to drive it.
 export default function ExperimentChrome({

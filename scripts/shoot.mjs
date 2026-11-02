@@ -3,17 +3,19 @@
 // `drag` is "x0,y0;x1,y1;..." in CSS pixels. Console errors are printed, which
 // is where a shader compile failure shows up.
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const [url, out, w = '1440', h = '900', drag = ''] = process.argv.slice(2);
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const port = 9300 + Math.floor(Math.random() * 500);
+// Port 0 lets Chrome pick a free port and write it to the profile, so shots
+// run in parallel can't land on each other's browser.
+const profile = mkdtempSync(join(tmpdir(), 'shoot-'));
 const chrome = spawn(CHROME, [
   '--headless=new',
-  `--remote-debugging-port=${port}`,
-  `--user-data-dir=${mkdtempSync(join(tmpdir(), 'shoot-'))}`,
+  '--remote-debugging-port=0',
+  `--user-data-dir=${profile}`,
   `--window-size=${w},${h}`,
   '--enable-unsafe-swiftshader',
   '--hide-scrollbars',
@@ -25,6 +27,9 @@ let target;
 for (let i = 0; i < 50 && !target; i++) {
   await sleep(200);
   try {
+    const port = readFileSync(join(profile, 'DevToolsActivePort'), 'utf8')
+      .split('\n')[0]
+      .trim();
     const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
     target = list.find((t) => t.type === 'page');
   } catch {}
@@ -80,6 +85,15 @@ if (process.env.STORE) {
 await send('Page.navigate', { url });
 await sleep(Number(process.env.WAIT ?? 7000));
 
+// PRE='…' runs in the page before the drag, e.g. to pick a tool.
+if (process.env.PRE) {
+  await send('Runtime.evaluate', {
+    expression: process.env.PRE,
+    awaitPromise: true,
+  });
+  await sleep(300);
+}
+
 if (drag) {
   const pts = drag.split(';').map((p) => p.split(',').map(Number));
   const mouse = (type, [x, y], buttons) =>
@@ -106,6 +120,17 @@ if (drag) {
   }
   await mouse('mouseReleased', pts.at(-1), 0);
   await sleep(800);
+}
+
+// EVAL='…' runs in the page before the shot (awaited); its result is printed.
+if (process.env.EVAL) {
+  const r = await send('Runtime.evaluate', {
+    expression: process.env.EVAL,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  console.log('[eval]', JSON.stringify(r.result?.value ?? r.exceptionDetails));
+  await sleep(Number(process.env.AFTER ?? 1500));
 }
 
 const shot = await send('Page.captureScreenshot', { format: 'png' });

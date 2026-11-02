@@ -31,3 +31,43 @@ html,
 body {
   @apply bg-neutral-100 font-sans text-neutral-900 antialiased;
 }
+
+/* Raised type: the fill is the ground's colour, so the letters exist only as
+   relief. A highlight offset towards the light catches the near edge; a tight
+   contact shadow and a soft drop fall away from it, lengthened by `--lk`.
+   `--lx`/`--ly` (unit vector to the light) and `--lk` are written per block by
+   `home/light.ts`; the rest come from the tilde panel via the page root.
+   Text shadows also fall on underlines, so links lift with the words. */
+.raised {
+  --lx: -0.57;
+  --ly: -0.82;
+  --lk: 1;
+  --d: var(--body-d, 1.2px);
+  color: var(--body-fill, var(--ground));
+  text-shadow:
+    calc(var(--lx) * var(--d) * 0.75) calc(var(--ly) * var(--d) * 0.75)
+      calc(var(--d) * 0.45) rgb(255 255 255 / var(--hi, 0.85)),
+    calc(var(--lx) * var(--d) * -1 * var(--lk))
+      calc(var(--ly) * var(--d) * -1 * var(--lk))
+      calc(var(--d) * (0.3 + 0.45 * var(--lk)))
+      rgb(var(--shade, 58 54 68) / var(--sh, 0.22)),
+    calc(var(--lx) * var(--d) * -2.6 * var(--lk))
+      calc(var(--ly) * var(--d) * -2.6 * var(--lk))
+      calc(var(--d) * 3 * var(--soft, 1))
+      rgb(var(--shade, 58 54 68) / var(--drop, 0.12));
+}
+.raised-head {
+  --d: var(--head-d, 3px);
+  color: var(--head-fill, var(--ground));
+}
+
+/* The works panels' ground: a fine dot screen. */
+.dot-field {
+  background-color: var(--ground);
+  background-image: radial-gradient(
+    circle at center,
+    rgb(var(--shade, 58 54 68) / 0.42) 0.6px,
+    transparent 1px
+  );
+  background-size: 4px 4px;
+}

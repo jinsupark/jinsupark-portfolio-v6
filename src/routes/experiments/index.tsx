@@ -1,8 +1,11 @@
-import { Suspense } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import { EXPERIMENTS } from '@/experiments/registry';
 
-export function ExperimentIndex() {
+export const Route = createFileRoute('/experiments/')({
+  component: ExperimentIndex,
+});
+
+function ExperimentIndex() {
   return (
     <main className="min-h-dvh bg-neutral-950 p-8 font-mono text-xs text-neutral-300">
       <h1 className="tracking-widest text-neutral-500 uppercase">
@@ -12,7 +15,8 @@ export function ExperimentIndex() {
         {EXPERIMENTS.map((x) => (
           <li key={x.slug}>
             <Link
-              to={`/experiments/${x.slug}`}
+              to="/experiments/$slug"
+              params={{ slug: x.slug }}
               className="group block max-w-md"
             >
               <div className="tracking-widest text-white uppercase group-hover:underline">
@@ -25,16 +29,5 @@ export function ExperimentIndex() {
         ))}
       </ul>
     </main>
-  );
-}
-
-export function ExperimentPage() {
-  const { slug } = useParams();
-  const x = EXPERIMENTS.find((e) => e.slug === slug);
-  if (!x) return <Navigate to="/experiments" replace />;
-  return (
-    <Suspense fallback={<div className="fixed inset-0 bg-black" />}>
-      <x.Component />
-    </Suspense>
   );
 }
