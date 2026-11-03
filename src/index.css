@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
 @theme {
-  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
   --font-mono: 'Geist Mono', monospace;
 }
 
@@ -11,6 +11,22 @@
   [role='button']:not(:disabled) {
     cursor: pointer;
   }
+}
+
+@font-face {
+  font-family: 'Inter Variable';
+  src: url('./assets/fonts/inter-variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter Variable';
+  src: url('./assets/fonts/inter-variable-italic.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
 }
 
 @font-face {
@@ -35,13 +51,16 @@ body {
 /* Raised type: the fill is the ground's colour, so the letters exist only as
    relief. A highlight offset towards the light catches the near edge; a tight
    contact shadow and a soft drop fall away from it, lengthened by `--lk`.
-   `--lx`/`--ly` (unit vector to the light) and `--lk` are written per block by
-   `home/light.ts`; the rest come from the tilde panel via the page root.
-   Text shadows also fall on underlines, so links lift with the words. */
-.raised {
+   One light for the whole page, at the top left: `--lx`/`--ly` is the unit
+   vector towards it. The tilde panel overrides all of these on the page root
+   (`home/light.ts`). Text shadows also fall on underlines, so links lift
+   with the words. */
+:root {
   --lx: -0.57;
   --ly: -0.82;
   --lk: 1;
+}
+.raised {
   --d: var(--body-d, 1.2px);
   color: var(--body-fill, var(--ground));
   text-shadow:
@@ -61,13 +80,21 @@ body {
   color: var(--head-fill, var(--ground));
 }
 
-/* The works panels' ground: a fine dot screen. */
+/* The works panels' ground: a fine dot screen. `--dot` is also read by the
+   WebGL page copy (`home/pagePainter.ts`). */
 .dot-field {
+  --dot: rgb(var(--shade, 58 54 68) / 0.42);
   background-color: var(--ground);
   background-image: radial-gradient(
     circle at center,
-    rgb(var(--shade, 58 54 68) / 0.42) 0.6px,
+    var(--dot) 0.6px,
     transparent 1px
   );
   background-size: 4px 4px;
+}
+
+/* Once the WebGL copy is drawing, the HTML stays for layout, links and
+   screen readers but paints nothing. */
+[data-gl='live'] {
+  opacity: 0;
 }

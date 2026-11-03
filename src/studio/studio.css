@@ -1,0 +1,74 @@
+@font-face {
+  font-family: 'Studio Inter';
+  src: url('./fonts/inter-variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+.studio {
+  font-family: 'Studio Inter', system-ui, sans-serif;
+  color-scheme: light;
+  -webkit-font-smoothing: antialiased;
+}
+
+.studio-range {
+  width: 100%;
+  min-width: 0;
+  height: 14px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.studio-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.1);
+}
+.studio-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.1);
+}
+.studio-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow:
+    0 0 0 0.5px rgb(0 0 0 / 0.25),
+    0 1px 2px rgb(0 0 0 / 0.2);
+}
+.studio-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow:
+    0 0 0 0.5px rgb(0 0 0 / 0.25),
+    0 1px 2px rgb(0 0 0 / 0.2);
+}
+
+.studio-swatch {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+}
+.studio-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.studio-swatch::-webkit-color-swatch {
+  border: 0.5px solid rgb(0 0 0 / 0.15);
+  border-radius: 3px;
+}
+.studio-swatch::-moz-color-swatch {
+  border: 0.5px solid rgb(0 0 0 / 0.15);
+  border-radius: 3px;
+}

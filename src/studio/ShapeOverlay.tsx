@@ -330,7 +330,7 @@ export default function ShapeOverlay({
         <path
           d={pathTo(sel)}
           fill="none"
-          stroke="#38bdf8"
+          stroke="#0ea5e9"
           strokeWidth={1}
           vectorEffect="non-scaling-stroke"
           pointerEvents="none"
@@ -339,8 +339,8 @@ export default function ShapeOverlay({
       {preview && (
         <path
           d={preview}
-          fill="rgba(56,189,248,0.12)"
-          stroke="#38bdf8"
+          fill="rgba(14,165,233,0.12)"
+          stroke="#0ea5e9"
           strokeWidth={1}
           vectorEffect="non-scaling-stroke"
           pointerEvents="none"
@@ -368,7 +368,7 @@ export default function ShapeOverlay({
                       y1={p.y}
                       x2={h.x}
                       y2={h.y}
-                      stroke="#38bdf8"
+                      stroke="#0ea5e9"
                       strokeWidth={1}
                       vectorEffect="non-scaling-stroke"
                       pointerEvents="none"
@@ -377,8 +377,8 @@ export default function ShapeOverlay({
                       cx={h.x}
                       cy={h.y}
                       r={4}
-                      fill="#0f172a"
-                      stroke="#38bdf8"
+                      fill="#ffffff"
+                      stroke="#0ea5e9"
                       vectorEffect="non-scaling-stroke"
                       onPointerDown={(e) => grab(e, i, part)}
                     />
@@ -390,8 +390,8 @@ export default function ShapeOverlay({
                 width={9}
                 height={9}
                 rx={smooth ? 4.5 : 0}
-                fill={picked === i ? '#38bdf8' : '#0f172a'}
-                stroke="#38bdf8"
+                fill={picked === i ? '#0ea5e9' : '#ffffff'}
+                stroke="#0ea5e9"
                 vectorEffect="non-scaling-stroke"
                 className="cursor-move"
                 onPointerDown={(e) => grab(e, i, 'p')}
@@ -405,7 +405,7 @@ export default function ShapeOverlay({
           cy={hover.y}
           r={brush.size}
           fill="none"
-          stroke="#38bdf8"
+          stroke="#0ea5e9"
           strokeDasharray="4 4"
           vectorEffect="non-scaling-stroke"
           pointerEvents="none"

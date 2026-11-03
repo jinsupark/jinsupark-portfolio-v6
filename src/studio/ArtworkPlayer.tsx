@@ -11,11 +11,13 @@ export default function ArtworkPlayer({
   doc,
   className = '',
   onCompositor,
+  onBackdrop,
   children,
 }: {
   doc: Artwork;
   className?: string;
   onCompositor?: (c: Compositor | null) => void;
+  onBackdrop?: () => void;
   children?: ReactNode;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -75,7 +77,11 @@ export default function ArtworkPlayer({
   return (
     // The artwork box is out of flow, so its size can never feed back into the
     // container it was measured from.
-    <div ref={host} className={`relative overflow-hidden ${className}`}>
+    <div
+      ref={host}
+      className={`relative overflow-hidden ${className}`}
+      onPointerDown={(e) => e.target === e.currentTarget && onBackdrop?.()}
+    >
       <div
         className="absolute top-1/2 left-1/2 -translate-1/2"
         style={{ width: box.w, height: box.h }}

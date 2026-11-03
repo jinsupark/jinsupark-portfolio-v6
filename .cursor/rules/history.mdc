@@ -118,18 +118,75 @@ free. A stroke follows the torn edge; a shadow is the torn, combined shape
 offset. A layer with no shape is an exact analytic rectangle, so artworks
 saved before shapes existed render as before (verified on `field-notes`).
 
-## Open questions from design talks
-- **Raised text on the site** (neumorphism, from a Figma mock): feasible with
- `text-shadow` alone. The open issue is readability. Ground-coloured text has
- near-zero contrast, so body copy wants a slightly darker fill than the
- headline.
-- **Water drops across the real page.** WebGL can't read DOM pixels.
- - `backdrop-filter: url(#svg-filter)` with a displacement map bends the live
- page, but only in Chromium.
- - Safari/Firefox would need `filter: url()` on the page wrapper with one
- page-sized map: costly on iOS, and the drops scroll with the content.
+## Studio UI: lucide, Inter, Paper layout (Nov 2026)
+- **Icons:** text labels were replaced with `lucide-react` icons, and the UI was split into
+ `Toolbar`, `LayerList` and `Inspector`.
+- **Type:** the site's sans font moved from Geist to Inter Variable. Geist is still loaded
+ (`main.tsx` calls `document.fonts.load`), because the paths renderer draws in Geist and
+ `field-notes` must not change. The studio got its own Inter copy so it can stand alone later.
+- **Layout:** Jin moved to Devin and brought Paper as the reference: a tool rail stuck to the
+ left sidebar, single-line layer rows with icons, double-click to rename, and page-level
+ settings on the right. He likes Paper's look in general: macOS-like, small but clear.
 
- Not built; a side-by-side test page in Safari was the proposed next step.
+## Home became a WebGL page with water on it (Nov 2026)
+- **Raised text** came from a Figma mock: ground-coloured type lifted by a
+ highlight and two shadows, all `text-shadow`. A pointer-following light was
+ built (a point light at a height, shadows lengthening with distance) and then
+ removed at Jin's request. It's one fixed top-left light now. Open issue:
+ ground-coloured body text has near-zero contrast.
+- **Water on the page.** WebGL can't read DOM pixels, so three routes were
+ weighed:
+ - `backdrop-filter: url(#svg)` with a displacement map works in Chromium
+ only.
+ - `filter: url()` on the page wrapper works everywhere but is costly on iOS.
+ - A WebGL copy of the page.
+
+ Jin chose the copy for the real droplet look.
+- **Matching the copy to the HTML:**
+ - **Text:** drawn per character at its DOM range box, with baseline =
+ box top + `fontBoundingBoxAscent`. That carries kerning and letter-spacing
+ without relying on `ctx.letterSpacing`.
+ - **Shadows:** parsed from the computed `text-shadow` and stamped onto a text
+ layer with canvas shadows. One stamp per shadow per group, not per glyph.
+ - **Measured:** mean difference ~2/255 against the HTML.
+ - **Resolution:** at 1× DPR, canvas shadow blur reads slightly heavier than
+ CSS; at 2× they're indistinguishable. Judge at 2× (`DPR=2` in `shoot.mjs`).
+- **Phone sizing:** drop sizes are CSS px tuned at 1440, which swamped a phone.
+ Scaling radii alone made small beads vanish: they never rose above the 0.5
+ waterline and left only their shadow. Edge blur and shadow offset must scale
+ with them.
+- **Rain on the windscreen** (from a poster reference with big, connected
+ glass rivulets). The water became fewer, bigger lumpy pools plus streams
+ (`home/streams.ts`): heads that slide diagonally in stick-slip jerks, lose
+ water into a trail of discs and evaporate it with age. The blur melts the
+ discs into one rivulet. Trail dots thinner than the waterline
+ (≈0.8 × the blur sigma) are dropped, not shrunk further. Otherwise they leave
+ grey ghost streaks: the shadow pass still draws where the height field sits
+ under 0.5.
+- **Toned down to a trickle** at Jin's request: "too much, too sticky,
+ jittery spawning and movement".
+ - **Fewer, thinner drops:** a few streams and a few beads, no pools, a crisper edge (12).
+ - **On the glass:** streams moved to screen space, so the page scrolls under them.
+ - **Corner to corner:** they enter beyond the top and right edges, so nothing pops in, and
+ head for the screen's own diagonal (`diagonal` toggle), which is steeper on a phone.
+ - **Smooth motion:** pace now eases along a slow wave instead of stick-slip jerks.
+ Trail width varies by a wave along the run rather than randomly per dot,
+ which had made trails flicker as they dried.
+ - **Presets beat code defaults:** `src/lab/presets/home-v2.json` (written by "Save defaults") silently
+ overrode the new code defaults until the redefined keys were removed from
+ it. Check the preset file when a default change seems to do nothing.
+ The browser's own saved values (`localStorage` `lab:<id>`) beat both: Jin
+ kept seeing the old pools after the preset was fixed. The store was renamed
+ `home-v3` to drop them, keeping only his real tweaks in the new preset.
+ When defaults change shape, bump the store id.
+- **Screenshot trap:** the image viewer can serve a stale copy of a
+ re-written PNG. Shoot to a new filename when a fix seems to change nothing.
+
+## Open questions
+- Safari hasn't been checked on the WebGL Home.
+- Hover states and the text-selection highlight don't show, because the HTML
+ is invisible.
+- Puddles can sit over words and hurt legibility.
 
 ## Jin's preferences
 - Brings references as images and expects the look matched, then tunes it

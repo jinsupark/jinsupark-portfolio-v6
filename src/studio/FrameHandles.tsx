@@ -84,7 +84,7 @@ export default function FrameHandles({
       onPointerDown={(e) => down(e, 'move')}
       onPointerMove={moveTo}
       onPointerUp={() => (drag.current = null)}
-      className="absolute cursor-move outline outline-1 outline-sky-400/90"
+      className="absolute cursor-move outline outline-1 outline-sky-500"
       style={{
         left: pct(frame.x, DESIGN.w),
         top: pct(frame.y, DESIGN.h),
@@ -97,7 +97,7 @@ export default function FrameHandles({
         <span
           key={g}
           onPointerDown={(e) => down(e, g)}
-          className="absolute size-2.5 -translate-1/2 border border-sky-400 bg-neutral-900"
+          className="absolute size-2.5 -translate-1/2 rounded-[2px] border border-sky-500 bg-white"
           style={{
             left: g.includes('w') ? 0 : '100%',
             top: g.includes('n') ? 0 : '100%',

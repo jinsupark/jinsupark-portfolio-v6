@@ -2,7 +2,13 @@
 // by the scene every frame without React re-rendering it. The panel subscribes;
 // the render loop just reads `store.values`.
 
-type Base = { group: string; label?: string };
+type Base = {
+  group: string;
+  label?: string;
+  // Shown only while this holds, e.g. a stroke's colour while there is a
+  // stroke. Hidden controls keep their values.
+  when?: (values: Record<string, unknown>) => boolean;
+};
 export type RangeControl = Base & {
   kind: 'range';
   value: number;
@@ -57,6 +63,11 @@ export const select = (
   options: { value: string; label: string }[],
   label?: string,
 ): SelectControl => ({ kind: 'select', group, value, options, label });
+
+export const when = <C extends Control>(
+  control: C,
+  test: (values: Record<string, unknown>) => boolean,
+): C => ({ ...control, when: test });
 
 export const text = (
   group: string,

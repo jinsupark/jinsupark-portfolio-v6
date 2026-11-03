@@ -71,7 +71,7 @@ await send('Runtime.enable');
 await send('Emulation.setDeviceMetricsOverride', {
   width: +w,
   height: +h,
-  deviceScaleFactor: 1,
+  deviceScaleFactor: Number(process.env.DPR ?? 1),
   mobile: false,
 });
 await send('Page.enable');

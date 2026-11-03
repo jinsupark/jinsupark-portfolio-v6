@@ -1,6 +1,13 @@
 import { Link, useNavigate } from '@tanstack/react-router';
+import {
+  ArrowLeft,
+  ChevronDown,
+  FilePlus,
+  LayoutGrid,
+  RotateCcw,
+  Save,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ControlGroups, PanelButton } from '@/lab/ControlRows';
 import { defaultsOf, fit } from '@/lab/controls';
 import { WORKS, workOf } from '@/works';
 import ArtworkPlayer from './ArtworkPlayer';
@@ -16,33 +23,29 @@ import {
   type LayerDoc,
 } from './document';
 import FrameHandles from './FrameHandles';
+import Inspector from './Inspector';
+import LayerList from './LayerList';
 import { layerTypesFor } from './registry';
 import type { ShapeDoc } from './shape';
 import ShapeOverlay from './ShapeOverlay';
-import { typing, type Brush, type Tool } from './tools';
 import {
   artworkSchema,
+  brushSchema,
   combineSchema,
-  compositeSchema,
   edgeSchema,
-  frameSchema,
-  fxSchema,
-  maskSchema,
-  shaderSchema,
-  shapeSchema,
 } from './studioSchemas';
+import Toolbar from './Toolbar';
+import { TOOL_HINTS, TOOLS, typing, type Brush, type Tool } from './tools';
+import {
+  ControlGroups,
+  IconButton,
+  Labeled,
+  Section,
+  TextArea,
+  TextField,
+} from './ui';
+import './studio.css';
 
-const TOOLS: { tool: Tool; key: string; label: string }[] = [
-  { tool: 'select', key: 'v', label: 'Select' },
-  { tool: 'rect', key: 'r', label: 'Rect' },
-  { tool: 'ellipse', key: 'e', label: 'Ellipse' },
-  { tool: 'triangle', key: 't', label: 'Triangle' },
-  { tool: 'polygon', key: 'g', label: 'Polygon' },
-  { tool: 'star', key: 'k', label: 'Star' },
-  { tool: 'pen', key: 'p', label: 'Draw' },
-  { tool: 'edit', key: 'a', label: 'Points' },
-  { tool: 'smear', key: 's', label: 'Smear' },
-];
 const SHAPE_NAMES: Partial<Record<Tool, string>> = {
   rect: 'Rectangle',
   ellipse: 'Ellipse',
@@ -131,9 +134,12 @@ export default function Studio({ work }: { work?: string }) {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const hit = TOOLS.find((x) => x.key === e.key.toLowerCase());
+      const hit = TOOLS.flat().find((x) => x.key === e.key.toLowerCase());
       if (hit) setTool(hit.tool);
-      if (e.key === 'Escape') setTool('select');
+      if (e.key === 'Escape') {
+        if (tool === 'select') setSelected(null);
+        else setTool('select');
+      }
     };
     addEventListener('keydown', key);
     return () => removeEventListener('keydown', key);
@@ -175,13 +181,14 @@ export default function Studio({ work }: { work?: string }) {
     setSelected(l.id);
   };
 
-  const move = (id: string, by: number) =>
+  // `index` is the layer's place in document order, bottom to top.
+  const moveTo = (id: string, index: number) =>
     setDoc((d) => {
       const i = d.layers.findIndex((l) => l.id === id);
-      const j = i + by;
-      if (i < 0 || j < 0 || j >= d.layers.length) return d;
+      if (i < 0 || i === index) return d;
       const layers = [...d.layers];
-      [layers[i], layers[j]] = [layers[j], layers[i]];
+      const [l] = layers.splice(i, 1);
+      layers.splice(Math.max(0, Math.min(layers.length, index)), 0, l);
       return { ...d, layers };
     });
 
@@ -267,225 +274,89 @@ export default function Studio({ work }: { work?: string }) {
     setSelected(next.layers.at(-1)?.id ?? null);
   };
 
-  const type = layer ? types[layer.type] : undefined;
-  const layerValues =
-    layer && type
-      ? { ...defaultsOf(type.schema), ...fit(layer.values, type.schema) }
-      : {};
-  const edgeValues: Record<string, unknown> = {
-    ...defaultsOf(edgeSchema),
-    ...fit(layer?.edge ?? {}, edgeSchema),
-  };
-  const combineValues: Record<string, unknown> = layer
-    ? (() => {
-        const s = combineSchema(layer, doc.layers);
-        return { ...defaultsOf(s), ...fit(layer.combine ?? {}, s) };
-      })()
-    : {};
-
   return (
-    <div className="fixed inset-0 grid grid-cols-[17rem_minmax(0,1fr)_19rem] bg-neutral-900 font-mono text-[10px] text-neutral-300 select-none">
-      <aside className="flex min-h-0 flex-col border-r border-white/10">
-        <header className="flex items-center justify-between border-b border-white/10 px-3 py-2 tracking-widest text-neutral-500 uppercase">
-          <Link to="/" className="hover:text-neutral-200">
-            ← Studio
-          </Link>
-          <Link to="/works" className="hover:text-neutral-200">
-            Works
-          </Link>
-        </header>
-        <div className="flex flex-wrap gap-1 border-b border-white/10 p-2">
-          <PanelButton onClick={save}>Save</PanelButton>
-          <PanelButton onClick={startNew}>New</PanelButton>
-          {work && <PanelButton onClick={revert}>Revert</PanelButton>}
-          <select
-            value={work ?? ''}
-            onChange={(e) => open(e.target.value)}
-            className="rounded-sm bg-white/10 px-1 py-1 uppercase"
+    <div className="studio fixed inset-0 grid grid-cols-[16rem_2.75rem_minmax(0,1fr)_17.5rem] bg-neutral-50 text-[11px] text-neutral-800 select-none">
+      <aside className="flex min-h-0 flex-col border-r border-black/8">
+        <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-black/6 pr-1.5 pl-1.5">
+          <Link
+            to="/"
+            title="Back to the site"
+            className="grid size-6 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-black/5 hover:text-neutral-900"
           >
-            <option value="" className="bg-neutral-900">
-              Draft
-            </option>
-            {WORKS.map((w) => (
-              <option key={w.slug} value={w.slug} className="bg-neutral-900">
-                Open {w.slug}
-              </option>
-            ))}
-          </select>
-        </div>
-        {status && (
-          <p className="border-b border-white/10 px-3 py-2 text-neutral-400">
-            {status}
-          </p>
-        )}
-        <div className="space-y-1.5 border-b border-white/10 px-3 py-3">
-          <TextRow
-            label="slug"
-            value={doc.slug}
-            onChange={(slug) => setDoc((d) => ({ ...d, slug }))}
-          />
-          <TextRow
-            label="title"
-            value={doc.title}
-            onChange={(title) => setDoc((d) => ({ ...d, title }))}
-          />
-          <label className="grid gap-1">
-            <span className="text-neutral-400">about</span>
-            <textarea
-              value={doc.about}
-              rows={3}
-              onChange={(e) => setDoc((d) => ({ ...d, about: e.target.value }))}
-              className="resize-none rounded-sm bg-white/10 px-1.5 py-1 select-text"
-            />
-          </label>
-          <label className="grid grid-cols-[7rem_1fr] items-center gap-2">
-            <span className="text-neutral-400">featured on home</span>
-            <input
-              type="checkbox"
-              checked={doc.featured}
-              onChange={(e) =>
-                setDoc((d) => ({ ...d, featured: e.target.checked }))
-              }
-              className="justify-self-start accent-neutral-200"
-            />
-          </label>
-        </div>
-        <div className="overflow-y-auto">
-          <ControlGroups
-            schema={artworkSchema}
-            values={{ background: doc.background, ...doc.post }}
-            onChange={(k, v) =>
-              setDoc((d) =>
-                k === 'background'
-                  ? { ...d, background: v as string }
-                  : { ...d, post: { ...d.post, [k]: v } },
-              )
-            }
-          />
-          <div className="flex items-center justify-between px-3 py-2">
-            <span className="tracking-widest text-neutral-100 uppercase">
-              Layers
-            </span>
+            <ArrowLeft size={13} />
+          </Link>
+          <span className="relative flex min-w-0 flex-1 items-center rounded-md hover:bg-black/5">
             <select
-              value=""
-              onChange={(e) => addLayer(e.target.value)}
-              className="rounded-sm bg-white/10 px-1 py-0.5"
+              value={work ?? ''}
+              onChange={(e) => open(e.target.value)}
+              title="Open a work"
+              className="h-6 w-full min-w-0 cursor-pointer appearance-none truncate bg-transparent pr-5 pl-1.5 text-[12px] font-semibold text-neutral-900 outline-none"
             >
-              <option value="" className="bg-neutral-900">
-                + shader
-              </option>
-              {Object.entries(types).map(([id, t]) => (
-                <option key={id} value={id} className="bg-neutral-900">
-                  {t.label}
-                  {id.startsWith('local/') ? ' (this artwork)' : ''}
+              <option value="">Unsaved draft</option>
+              {WORKS.map((w) => (
+                <option key={w.slug} value={w.slug}>
+                  {w.doc.title || w.slug}
                 </option>
               ))}
             </select>
-          </div>
-          <ul className="pb-3">
-            {[...doc.layers].reverse().map((l) => (
-              <li
-                key={l.id}
-                onClick={() => setSelected(l.id)}
-                className={`flex items-center gap-1 px-2 py-1 ${l.id === selected ? 'bg-white/15 text-neutral-50' : 'hover:bg-white/5'}`}
-              >
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    patchLayer(l.id, { visible: !l.visible });
-                  }}
-                  className={`w-4 ${l.visible ? '' : 'text-neutral-600'}`}
-                  title="visible"
-                >
-                  {l.visible ? '●' : '○'}
-                </button>
-                <span className="flex-1 truncate">
-                  {l.name}
-                  {types[l.type] ? '' : ' (missing type)'}
-                </span>
-                {(
-                  [
-                    ['↑', 1],
-                    ['↓', -1],
-                  ] as const
-                ).map(([glyph, by]) => (
-                  <button
-                    key={glyph}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      move(l.id, by);
-                    }}
-                    className="px-1 text-neutral-500 hover:text-neutral-100"
-                  >
-                    {glyph}
-                  </button>
-                ))}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    remove(l.id);
-                  }}
-                  className="px-1 text-neutral-500 hover:text-red-300"
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
+            <ChevronDown
+              size={12}
+              className="pointer-events-none absolute right-1.5 text-neutral-400"
+            />
+          </span>
+          <IconButton title="Save" onClick={save}>
+            <Save size={13} />
+          </IconButton>
+          <IconButton title="New artwork" onClick={startNew}>
+            <FilePlus size={13} />
+          </IconButton>
+          {work && (
+            <IconButton title="Revert to saved" onClick={revert}>
+              <RotateCcw size={13} />
+            </IconButton>
+          )}
+          <Link
+            to="/works"
+            title="All works"
+            className="grid size-6 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-black/5 hover:text-neutral-900"
+          >
+            <LayoutGrid size={13} />
+          </Link>
+        </header>
+        {status && (
+          <p className="shrink-0 border-b border-black/6 px-3 py-2 text-neutral-500">
+            {status}
+          </p>
+        )}
+
+        <LayerList
+          layers={doc.layers}
+          types={types}
+          selected={selected}
+          onSelect={setSelected}
+          onPatch={patchLayer}
+          onMoveTo={moveTo}
+          onRemove={remove}
+          onAdd={(t) => addLayer(t)}
+        />
       </aside>
 
-      <main className="relative min-h-0 bg-neutral-800">
-        <div className="absolute inset-x-0 top-0 flex h-10 items-center justify-center gap-1 px-2">
-          {TOOLS.map((t) => (
-            <button
-              key={t.tool}
-              onClick={() => setTool(t.tool)}
-              title={`${t.label} (${t.key.toUpperCase()})`}
-              className={`rounded-sm px-2 py-1 tracking-wider uppercase ${tool === t.tool ? 'bg-sky-400/30 text-neutral-50' : 'bg-white/10 hover:bg-white/20'}`}
-            >
-              {t.label}
-            </button>
-          ))}
-          {tool === 'smear' && (
-            <div className="ml-3 flex items-center gap-2 text-neutral-400">
-              <label className="flex items-center gap-1">
-                size
-                <input
-                  type="range"
-                  min={8}
-                  max={300}
-                  value={brush.size}
-                  onChange={(e) =>
-                    setBrush((b) => ({ ...b, size: +e.target.value }))
-                  }
-                  className="w-20 accent-neutral-200"
-                />
-              </label>
-              <label className="flex items-center gap-1">
-                strength
-                <input
-                  type="range"
-                  min={0.05}
-                  max={1}
-                  step={0.01}
-                  value={brush.strength}
-                  onChange={(e) =>
-                    setBrush((b) => ({ ...b, strength: +e.target.value }))
-                  }
-                  className="w-20 accent-neutral-200"
-                />
-              </label>
-            </div>
-          )}
-        </div>
-        <p className="absolute inset-x-0 bottom-0 flex h-8 items-center justify-center text-neutral-500">
+      <Toolbar
+        tool={tool}
+        onTool={setTool}
+        onUndo={() => step(true)}
+        onRedo={() => step(false)}
+      />
+
+      <main className="relative min-h-0 bg-neutral-400">
+        <p className="absolute inset-x-0 bottom-0 flex h-8 items-center justify-center text-neutral-700/80">
           {TOOL_HINTS[tool]}
         </p>
         <ArtworkPlayer
           doc={doc}
-          className="absolute! inset-x-8 top-12 bottom-9"
+          className="absolute! inset-x-8 top-8 bottom-9"
           onCompositor={(c) => (comp.current = c)}
+          onBackdrop={() => setSelected(null)}
         >
           <ShapeOverlay
             tool={tool}
@@ -512,208 +383,75 @@ export default function Studio({ work }: { work?: string }) {
         </ArtworkPlayer>
       </main>
 
-      <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-white/10">
+      <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-black/8">
+        {tool === 'smear' && (
+          <ControlGroups
+            id="studio"
+            schema={brushSchema}
+            values={brush}
+            onChange={(k, v) => setBrush((b) => ({ ...b, [k]: v }))}
+          />
+        )}
         {layer ? (
-          <>
-            <div className="space-y-1.5 border-b border-white/10 px-3 py-3">
-              <TextRow
-                label="name"
-                value={layer.name}
-                onChange={(name) => patchLayer(layer.id, { name })}
-              />
-              <p className="text-neutral-500">
-                {layer.type} · v{layer.version}
-              </p>
-              <div className="flex gap-1 pt-1">
-                <PanelButton
-                  onClick={() => patchLayer(layer.id, { frame: fullFrame() })}
-                >
-                  Fill artwork
-                </PanelButton>
-                {type && 'seed' in type.schema && (
-                  <PanelButton
-                    onClick={() =>
-                      patchLayer(layer.id, {
-                        values: { ...layerValues, seed: randomSeed() },
-                      })
-                    }
-                  >
-                    Re-seed
-                  </PanelButton>
-                )}
-              </div>
-            </div>
-            <ControlGroups
-              schema={shaderSchema(types)}
-              values={{
-                type: layer.type,
-                fillSpace: layer.fillSpace ?? 'shape',
-              }}
-              onChange={(k, v) => {
-                if (k === 'fillSpace')
-                  return patchLayer(layer.id, {
-                    fillSpace: v as LayerDoc['fillSpace'],
-                  });
-                const t = types[v as string];
-                if (!t || v === layer.type) return;
-                // Keep a name the user gave it; follow the shader otherwise.
-                const named = layer.name !== type?.label;
-                patchLayer(layer.id, {
-                  type: v as string,
-                  version: t.version,
-                  values: { ...t.initial() },
-                  ...(!named && { name: t.label }),
-                });
-              }}
-            />
-            <section className="border-b border-white/5 px-3 py-2">
-              <div className="flex items-center justify-between pb-1.5">
-                <span className="tracking-widest text-neutral-100 uppercase">
-                  Shape
-                </span>
-                <span className="text-neutral-500">
-                  {layer.shape ? layer.shape.kind : 'frame'}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-1">
-                <PanelButton onClick={() => setTool('edit')}>
-                  Edit points
-                </PanelButton>
-                <PanelButton onClick={() => setTool('smear')}>
-                  Smear
-                </PanelButton>
-                {layer.shape && (
-                  <PanelButton
-                    onClick={() => patchLayer(layer.id, { shape: undefined })}
-                  >
-                    Clear shape
-                  </PanelButton>
-                )}
-              </div>
-            </section>
-            {layer.shape && layer.shape.kind !== 'path' && (
-              <ControlGroups
-                schema={shapeSchema(layer.shape.kind)}
-                values={layer.shape}
-                onChange={(k, v) =>
-                  patchLayer(layer.id, {
-                    shape: { ...layer.shape!, [k]: v },
-                  })
-                }
-              />
-            )}
-            <ControlGroups
-              schema={edgeSchema}
-              values={edgeValues}
-              onChange={(k, v) =>
-                patchLayer(layer.id, { edge: { ...edgeValues, [k]: v } })
-              }
-              onReset={(group) => {
-                const d = defaultsOf(edgeSchema);
-                const next: Record<string, unknown> = { ...edgeValues };
-                for (const [k, s] of Object.entries(edgeSchema))
-                  if (s.group === group) next[k] = d[k as keyof typeof d];
-                patchLayer(layer.id, { edge: next });
-              }}
-            />
-            <ControlGroups
-              schema={combineSchema(layer, doc.layers)}
-              values={combineValues}
-              onChange={(k, v) =>
-                patchLayer(layer.id, { combine: { ...combineValues, [k]: v } })
-              }
-              onReset={() => patchLayer(layer.id, { combine: undefined })}
-            />
-            <ControlGroups
-              schema={frameSchema}
-              values={layer.frame}
-              onChange={(k, v) =>
-                patchLayer(layer.id, { frame: { ...layer.frame, [k]: v } })
-              }
-            />
-            <ControlGroups
-              schema={compositeSchema}
-              values={layer}
-              onChange={(k, v) => patchLayer(layer.id, { [k]: v })}
-            />
-            <ControlGroups
-              schema={maskSchema(layer, doc.layers)}
-              values={{ ...layer.mask, source: layer.mask.source ?? '' }}
-              onChange={(k, v) =>
-                patchLayer(layer.id, {
-                  mask: {
-                    ...layer.mask,
-                    [k]: k === 'source' ? (v as string) || null : v,
-                  },
-                })
-              }
-            />
-            <ControlGroups
-              schema={fxSchema}
-              values={layer.fx}
-              onChange={(k, v) =>
-                patchLayer(layer.id, { fx: { ...layer.fx, [k]: v } })
-              }
-              onReset={() => patchLayer(layer.id, { fx: { ...NO_FX } })}
-            />
-            {type && (
-              <ControlGroups
-                schema={type.schema}
-                values={layerValues}
-                onChange={(k, v) =>
-                  patchLayer(layer.id, { values: { ...layerValues, [k]: v } })
-                }
-                onReset={(group) => {
-                  const d = defaultsOf(type.schema);
-                  const next = { ...layerValues };
-                  for (const k in type.schema)
-                    if (type.schema[k].group === group) next[k] = d[k];
-                  patchLayer(layer.id, { values: next });
-                }}
-              />
-            )}
-          </>
+          <Inspector
+            key={layer.id}
+            layer={layer}
+            layers={doc.layers}
+            types={types}
+            onPatch={patchLayer}
+            onRemove={remove}
+            onTool={setTool}
+          />
         ) : (
-          <p className="p-3 text-neutral-500">
-            Add a layer, or pick one from the list.
-          </p>
+          <>
+            <Section id="studio:artwork" title="Artwork">
+              <Labeled label="title">
+                <TextField
+                  value={doc.title}
+                  onChange={(title) => setDoc((d) => ({ ...d, title }))}
+                />
+              </Labeled>
+              <Labeled label="slug">
+                <TextField
+                  value={doc.slug}
+                  onChange={(slug) => setDoc((d) => ({ ...d, slug }))}
+                />
+              </Labeled>
+              <div className="grid gap-1 pt-0.5">
+                <span className="text-neutral-500">About</span>
+                <TextArea
+                  value={doc.about}
+                  onChange={(about) => setDoc((d) => ({ ...d, about }))}
+                />
+              </div>
+              <Labeled label="featured on home">
+                <input
+                  type="checkbox"
+                  checked={doc.featured}
+                  onChange={(e) =>
+                    setDoc((d) => ({ ...d, featured: e.target.checked }))
+                  }
+                  className="justify-self-start accent-neutral-800"
+                />
+              </Labeled>
+            </Section>
+            <ControlGroups
+              id="studio"
+              closed={['Post']}
+              titles={{ Artwork: 'Background', Post: 'Post processing' }}
+              schema={artworkSchema}
+              values={{ background: doc.background, ...doc.post }}
+              onChange={(k, v) =>
+                setDoc((d) =>
+                  k === 'background'
+                    ? { ...d, background: v as string }
+                    : { ...d, post: { ...d.post, [k]: v } },
+                )
+              }
+            />
+          </>
         )}
       </aside>
     </div>
-  );
-}
-
-const randomSeed = () => 1 + Math.floor(Math.random() * 999);
-
-const TOOL_HINTS: Record<Tool, string> = {
-  select: 'click a shape to select · drag to move · corners resize',
-  rect: 'drag to draw · shift for a square · click for a default size',
-  ellipse: 'drag to draw · shift for a circle',
-  triangle: 'drag to draw',
-  polygon: 'drag to draw · sides in the inspector',
-  star: 'drag to draw · points in the inspector',
-  pen: 'draw a closed shape freehand',
-  edit: 'drag points and handles · double-click the outline to add · alt-click a point for corner / smooth · delete removes',
-  smear: 'drag across the outline to push it',
-};
-
-function TextRow({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <label className="grid grid-cols-[3rem_1fr] items-center gap-2">
-      <span className="text-neutral-400">{label}</span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="min-w-0 rounded-sm bg-white/10 px-1.5 py-1 select-text"
-      />
-    </label>
   );
 }

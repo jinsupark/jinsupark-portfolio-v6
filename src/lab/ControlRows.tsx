@@ -1,61 +1,166 @@
+import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import { useState } from 'react';
 import type { Control, Schema } from './controls';
 
+// Whether a section is open, remembered per `id` across reloads.
+function useOpen(id: string | undefined, initial: boolean) {
+  const key = id && `ui:open:${id}`;
+  const [open, set] = useState(() => {
+    const saved = key ? localStorage.getItem(key) : null;
+    return saved === null ? initial : saved === '1';
+  });
+  const toggle = () =>
+    set((o) => {
+      if (key) localStorage.setItem(key, o ? '0' : '1');
+      return !o;
+    });
+  return [open, toggle] as const;
+}
+
+// A collapsible block with a title row: the inspector's unit, and what each
+// control group renders as. `id` remembers its open state; `aside` sits at
+// the right of the title row (a reset, a count, an action).
+export function Section({
+  title,
+  id,
+  defaultOpen = true,
+  aside,
+  onReset,
+  children,
+}: {
+  title: React.ReactNode;
+  id?: string;
+  defaultOpen?: boolean;
+  aside?: React.ReactNode;
+  onReset?: () => void;
+  children: React.ReactNode;
+}) {
+  const [open, toggle] = useOpen(id, defaultOpen);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <section className="border-b border-white/5">
+      <div className="flex h-8 items-center gap-1 pr-2 pl-1.5">
+        <button
+          onClick={toggle}
+          className="flex min-w-0 flex-1 items-center gap-1 self-stretch tracking-widest text-neutral-100 uppercase"
+        >
+          <Chevron size={12} className="shrink-0 text-neutral-500" />
+          <span className="truncate">{title}</span>
+        </button>
+        {aside}
+        {onReset && (
+          <IconButton title="Reset" onClick={onReset}>
+            <RotateCcw size={11} />
+          </IconButton>
+        )}
+      </div>
+      {open && <div className="space-y-1.5 px-3 pb-3">{children}</div>}
+    </section>
+  );
+}
+
+export function IconButton({
+  title,
+  onClick,
+  active,
+  children,
+  className = '',
+}: {
+  title: string;
+  onClick: () => void;
+  active?: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <button
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className={`grid size-6 place-items-center rounded-sm ${active ? 'bg-sky-400/25 text-neutral-50' : 'text-neutral-500 hover:bg-white/10 hover:text-neutral-100'} ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 // The grouped control rows the lab panel shows, as a component of their own so
-// the studio's inspector can show a layer's controls the same way.
+// the studio's inspector can show a layer's controls the same way. A control
+// whose `when` fails is left out, and a group with nothing left to show goes
+// too. `id` remembers each group's open state; `closed` lists groups that
+// start shut.
 export function ControlGroups({
   schema,
   values,
   onChange,
   onReset,
+  id,
+  closed = [],
+  titles = {},
 }: {
   schema: Schema;
   values: Record<string, unknown>;
   onChange: (key: string, value: unknown) => void;
   onReset?: (group: string) => void;
+  id?: string;
+  closed?: string[];
+  titles?: Record<string, string>;
 }) {
-  const [closed, setClosed] = useState<Record<string, boolean>>({});
   const groups: [string, string[]][] = [];
   for (const key of Object.keys(schema)) {
+    if (schema[key].when && !schema[key].when!(values)) continue;
     const g = schema[key].group;
     let entry = groups.find(([name]) => name === g);
     if (!entry) groups.push((entry = [g, []]));
     entry[1].push(key);
   }
   return groups.map(([group, keys]) => (
-    <section key={group} className="border-b border-white/5">
-      <div className="flex items-center justify-between px-3 py-2">
-        <button
-          className="tracking-widest text-neutral-100 uppercase"
-          onClick={() => setClosed((c) => ({ ...c, [group]: !c[group] }))}
-        >
-          {closed[group] ? '+' : '−'} {group}
-        </button>
-        {onReset && (
-          <button
-            className="text-neutral-600 hover:text-neutral-300"
-            onClick={() => onReset(group)}
-          >
-            reset
-          </button>
-        )}
-      </div>
-      {!closed[group] && (
-        <div className="space-y-1.5 px-3 pb-3">
-          {keys.map((key) => (
-            <Row
-              key={key}
-              name={key}
-              control={schema[key]}
-              value={values[key]}
-              onChange={(v) => onChange(key, v)}
-            />
-          ))}
-        </div>
-      )}
-    </section>
+    <Section
+      key={group}
+      title={titles[group] ?? group}
+      id={id && `${id}:${group}`}
+      defaultOpen={!closed.includes(group)}
+      onReset={onReset && (() => onReset(group))}
+    >
+      {keys.map((key) => (
+        <Row
+          key={key}
+          name={key}
+          control={schema[key]}
+          value={values[key]}
+          onChange={(v) => onChange(key, v)}
+        />
+      ))}
+    </Section>
   ));
 }
+
+// A schema's rows with no group headers, for a section that has its own.
+export function Rows({
+  schema,
+  values,
+  onChange,
+}: {
+  schema: Schema;
+  values: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  return Object.keys(schema)
+    .filter((k) => !schema[k].when || schema[k].when!(values))
+    .map((key) => (
+      <Row
+        key={key}
+        name={key}
+        control={schema[key]}
+        value={values[key]}
+        onChange={(v) => onChange(key, v)}
+      />
+    ));
+}
+
+// "strokeAlign" -> "stroke align", for controls without a label of their own.
+const words = (key: string) =>
+  key.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
 
 export function PanelButton({
   onClick,
@@ -85,7 +190,7 @@ export function Row({
   value: unknown;
   onChange: (v: unknown) => void;
 }) {
-  const label = control.label ?? name;
+  const label = control.label ?? words(name);
   switch (control.kind) {
     case 'range': {
       const v = value as number;

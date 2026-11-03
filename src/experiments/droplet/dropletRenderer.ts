@@ -81,6 +81,7 @@ export class DropletRenderer {
         res: { value: new THREE.Vector2() },
         texel: { value: new THREE.Vector2() },
         fit: { value: new THREE.Vector2(1, 1) },
+        fitOff: { value: new THREE.Vector2(0, 0) },
         time: { value: 0 },
         thickness: { value: 0 },
         refract: { value: 0 },
@@ -286,6 +287,7 @@ export class DropletRenderer {
         const a = W / H;
         const b = el.videoWidth / el.videoHeight;
         u.fit.value.set(b > a ? a / b : 1, b > a ? 1 : b / a);
+        u.fitOff.value.set(0.5 - u.fit.value.x / 2, 0.5 - u.fit.value.y / 2);
       }
     } else {
       if (
@@ -303,6 +305,7 @@ export class DropletRenderer {
       }
       u.tBg.value = this.bgTex;
       u.fit.value.set(1, 1);
+      u.fitOff.value.set(0, 0);
     }
 
     if (this.dirty) {

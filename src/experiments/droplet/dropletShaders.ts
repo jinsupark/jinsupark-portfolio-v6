@@ -34,6 +34,7 @@ uniform sampler2D tH;
 uniform vec2 res;
 uniform vec2 texel;
 uniform vec2 fit;
+uniform vec2 fitOff;
 uniform float time;
 uniform float thickness;
 uniform float refract;
@@ -59,7 +60,9 @@ float prof(float m) {
   return 1.0 - pow(1.0 - t, 2.5);
 }
 float M(vec2 uv) { return texture2D(tH, uv).r; }
-vec3 bg(vec2 uv) { return texture2D(tBg, clamp((uv - 0.5) * fit + 0.5, 0.0, 1.0)).rgb; }
+// Screen uv to backdrop uv: a scale and offset, so the backdrop can be a
+// cover-fitted video or a window onto a page taller than the screen.
+vec3 bg(vec2 uv) { return texture2D(tBg, clamp(uv * fit + fitOff, 0.0, 1.0)).rgb; }
 
 void main() {
   vec2 uv = vUv;

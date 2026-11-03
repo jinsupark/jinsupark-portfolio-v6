@@ -4,6 +4,8 @@ import { createRouter, RouterProvider } from '@tanstack/react-router';
 import './index.css';
 import { routeTree } from './routeTree.gen';
 
+void document.fonts.load('1em Geist');
+
 const router = createRouter({ routeTree });
 
 declare module '@tanstack/react-router' {
