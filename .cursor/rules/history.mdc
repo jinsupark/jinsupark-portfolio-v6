@@ -127,6 +127,38 @@ saved before shapes existed render as before (verified on `field-notes`).
 - **Layout:** Jin moved to Devin and brought Paper as the reference: a tool rail stuck to the
  left sidebar, single-line layer rows with icons, double-click to rename, and page-level
  settings on the right. He likes Paper's look in general: macOS-like, small but clear.
+- **Light theme:** Jin chose light, like Paper. The studio forked the lab's control rows into
+ `studio/ui.tsx` rather than theming the shared ones, so the tilde panel stays dark and the
+ studio stays self-contained.
+ - Section titles are sentence case, and a closed section's title reads grey.
+ - Number fields are boxes with a prefix.
+ - The canvas surround is mid-grey (`neutral-400`).
+
+## Shaders became fills (Nov 2026)
+Jin asked for "shaders → fills" with several per layer, and for pixelate to be just another
+fill. The design that came out of it:
+- **Effects are fills with an input** (fills below, or the artwork behind), so the fixed
+ Filters section and a separate "backdrop effect" feature both went away. The
+ artwork-behind input is also the foundation for the deferred water-drop and glass
+ refraction.
+- **Settings open in a Figma popover.** He first picked inline expansion, then switched.
+- **Proving the conversion:** `field-notes` was rendered through the compositor at a fixed
+ time with a seeded `Math.random` and grain off, before and after the change.
+ - Deterministic areas (pixelated map, Node path, solids) matched exactly.
+ - Layers that pick random content (grid tiles, collage images, blueprint grain) still
+ differ. Their random draws depend on image-load timing, so they aren't a valid check.
+- **Trap:** a key event dispatched on `window` in a test skips the capture-before-bubble
+ ordering a real keystroke gets. Dispatch on `document.body` to test key priority.
+
+## Strokes, shadows, filters and export (Nov 2026)
+- **Reversal:** Jin first wanted pixelate as a fill, then said it should be a filter, like
+ Paper's Filters list. Effects moved out of fills; their "behind" input became a filter's
+ "background".
+- **Lists:** strokes became a list painted with fills (his choice: fills from the start),
+ and shadows became their own list.
+- **Edge:** only tear and feather are left. They change the outline, so everything follows
+ them.
+- **Export:** copied from Paper's Export section.
 
 ## Home became a WebGL page with water on it (Nov 2026)
 - **Raised text** came from a Figma mock: ground-coloured type lifted by a
@@ -196,3 +228,11 @@ saved before shapes existed render as before (verified on `field-notes`).
  TypeScript explanations.
 - Aesthetic: printed matter, paper and woodblock textures, technical drawing,
  monospace small caps. Vivid colour only where a reference asks for it.
+- **Studio UI rules:**
+ - No hover-reveal controls unless he asks: buttons stay visible. The one he asked for is
+ the layer list's eye, which shows on row hover and stays visible while a layer is hidden.
+ Layer rows have no remove button; delete is the Delete key or the inspector's trash.
+ - Remove buttons in lists are a minus, not a trash can.
+ - Icons sit bare, not inside boxes. Solid fills are the exception: they show a colour
+ swatch.
+ - Popovers sit 4px from the sidebar and drag by their header.

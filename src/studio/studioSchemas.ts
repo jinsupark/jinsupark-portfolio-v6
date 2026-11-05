@@ -53,41 +53,6 @@ export const maskSchema = (layer: LayerDoc, layers: LayerDoc[]): Schema => {
   };
 };
 
-const dithered = (v: Record<string, unknown>) => !!v.dither;
-export const fxSchema = {
-  pixelate: range('Filters', 0, 0, 240, 1, 'pixelate cells'),
-  mono: toggle('Filters', false),
-  invert: toggle('Filters', false),
-  posterize: range('Filters', 0, 0, 16, 1, 'posterize levels'),
-  threshold: range('Filters', 0, 0, 1, 0.01),
-  dither: toggle('Filters', false),
-  ditherScale: when(range('Filters', 2, 0.5, 12, 0.5, 'dither cell'), dithered),
-  ink: when(color('Filters', '#111111', 'dither ink'), dithered),
-  paper: when(color('Filters', '#f2f0eb', 'dither paper'), dithered),
-};
-
-// The shader filling a layer, and where it's laid out.
-export const shaderSchema = (types: Record<string, { label: string }>) => ({
-  type: select(
-    'Shader',
-    'solid',
-    Object.entries(types).map(([value, t]) => ({
-      value,
-      label: value.startsWith('local/') ? `${t.label} (this artwork)` : t.label,
-    })),
-    'shader',
-  ),
-  fillSpace: select(
-    'Shader',
-    'shape',
-    [
-      { value: 'shape', label: 'moves with shape' },
-      { value: 'canvas', label: 'fixed to canvas' },
-    ],
-    'laid out',
-  ),
-});
-
 export const shapeSchema = (kind: ShapeKind): Schema => {
   if (kind === 'rect')
     return { radius: range('Shape', 0, 0, 500, 0.5, 'corner radius') };
@@ -100,40 +65,39 @@ export const shapeSchema = (kind: ShapeKind): Schema => {
   return {};
 };
 
-// Every border treatment works off the shape's distance field, so they stack:
-// a tear moves the edge, the core is a paper band inside it, the stroke
-// follows the torn edge, and the shadow is the whole torn shape offset.
+// Changes to the outline itself, so the fills, strokes and shadows all follow
+// them: a tear moves the edge, a feather softens it.
 export const edgeSchema = {
   tear: range('Edge', 0, 0, 40, 0.1, 'torn edge'),
   tearScale: when(
     range('Edge', 0.06, 0.005, 0.5, 0.001, 'tear frequency'),
     on('tear'),
   ),
-  seed: when(range('Edge', 1, 1, 999, 1, 'tear seed'), on('tear')),
-  core: range('Edge', 0, 0, 40, 0.1, 'paper core'),
-  fibers: when(range('Edge', 0.6, 0, 2, 0.01, 'core fibres'), on('core')),
-  coreColor: when(color('Edge', '#f8f5ee', 'core colour'), on('core')),
-  stroke: range('Edge', 0, 0, 40, 0.1),
-  strokeAlign: when(
-    select(
-      'Edge',
-      'center',
-      [
-        { value: 'inside', label: 'inside' },
-        { value: 'center', label: 'centre' },
-        { value: 'outside', label: 'outside' },
-      ],
-      'stroke position',
-    ),
-    on('stroke'),
-  ),
-  strokeColor: when(color('Edge', '#111111', 'stroke colour'), on('stroke')),
+  seed: range('Edge', 1, 1, 999, 1, 'tear seed'),
   feather: range('Edge', 0, 0, 120, 0.5),
-  shadow: range('Shadow', 0, 0, 1, 0.01, 'strength'),
-  shadowX: when(range('Shadow', 6, -120, 120, 0.5, 'offset x'), on('shadow')),
-  shadowY: when(range('Shadow', 10, -120, 120, 0.5, 'offset y'), on('shadow')),
-  shadowBlur: when(range('Shadow', 14, 0, 160, 0.5, 'blur'), on('shadow')),
-  shadowColor: when(color('Shadow', '#1a1712', 'colour'), on('shadow')),
+};
+
+export const strokeSchema = {
+  width: range('Stroke', 2, 0.1, 80, 0.1),
+  align: select(
+    'Stroke',
+    'center',
+    [
+      { value: 'inside', label: 'inside' },
+      { value: 'center', label: 'centre' },
+      { value: 'outside', label: 'outside' },
+    ],
+    'position',
+  ),
+  offset: range('Stroke', 0, -80, 80, 0.5),
+  fibers: range('Stroke', 0, 0, 2, 0.01, 'paper fibres'),
+};
+
+export const shadowSchema = {
+  x: range('Shadow', 6, -120, 120, 0.5, 'offset x'),
+  y: range('Shadow', 10, -120, 120, 0.5, 'offset y'),
+  blur: range('Shadow', 14, 0, 160, 0.5),
+  color: color('Shadow', '#1a1712', 'colour'),
 };
 
 export const BOOLEAN_OPS = [
@@ -168,13 +132,71 @@ export const combineSchema = (layer: LayerDoc, layers: LayerDoc[]): Schema => {
   return s;
 };
 
+// Filters, by type. `main` is the value shown in the filter's row.
+export const FILTERS: Record<
+  string,
+  { label: string; main?: string; schema: Schema }
+> = {
+  blur: {
+    label: 'Blur',
+    main: 'radius',
+    schema: { radius: range('Blur', 4, 0, 120, 0.5) },
+  },
+  pixelate: {
+    label: 'Pixelate',
+    main: 'cells',
+    schema: { cells: range('Pixelate', 40, 1, 240, 1, 'cells across') },
+  },
+  mono: { label: 'Mono', schema: {} },
+  invert: { label: 'Invert', schema: {} },
+  posterize: {
+    label: 'Posterize',
+    main: 'levels',
+    schema: { levels: range('Posterize', 4, 2, 16, 1) },
+  },
+  threshold: {
+    label: 'Threshold',
+    main: 'level',
+    schema: { level: range('Threshold', 0.5, 0.01, 1, 0.01) },
+  },
+  dither: {
+    label: 'Dither',
+    main: 'scale',
+    schema: {
+      scale: range('Dither', 2, 0.5, 12, 0.5, 'cell size'),
+      ink: color('Dither', '#111111'),
+      paper: color('Dither', '#f2f0eb'),
+    },
+  },
+};
+
+export const filterInputSchema = select(
+  'Filter',
+  'layer',
+  [
+    { value: 'layer', label: 'layer' },
+    { value: 'background', label: 'background' },
+  ],
+  'applies to',
+);
+
+export const fillSpaceSchema = select(
+  'Fill',
+  'shape',
+  [
+    { value: 'shape', label: 'moves with shape' },
+    { value: 'canvas', label: 'fixed to canvas' },
+  ],
+  'laid out',
+);
+
 export const brushSchema = {
   size: range('Brush', 60, 8, 300, 1),
   strength: range('Brush', 0.8, 0.05, 1, 0.01),
 };
 
 export const artworkSchema = {
-  background: color('Artwork', '#e3e1dc'),
+  background: color('Artwork', '#e3e1dc', 'fill'),
   grain: range('Post', 0.04, 0, 0.4, 0.005),
   grainSize: range('Post', 1, 1, 6, 0.5, 'grain size'),
   vignette: range('Post', 0, 0, 1, 0.01),

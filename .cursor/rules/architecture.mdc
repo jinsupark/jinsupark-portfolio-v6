@@ -49,19 +49,20 @@ Home with a short about and contact links.
 ## Studio and compositor (`src/studio/`)
 - `document.ts` — the artwork format. Frames are in **design units**
   (`DESIGN` = 800×1000, 4:5), not pixels, so a piece is identical at any
-  display size; renderers draw in those units. Layer docs carry `type`,
-  `version`, frame (`x y w h rot`), `opacity`, `blend`, `mask`, `fx`, `values`.
+  display size; renderers draw in those units. Layer docs carry frame
+  (`x y w h rot`), `opacity`, `blend`, `mask` and **`fills`** (see Fills below).
 - `layer.ts` — the layer contract: a `LayerType` (schema, `initial()`,
   `create()`, `version`) whose instance renders into a `THREE.Texture`.
   `canvasLayer()` hosts any 2D renderer on an offscreen canvas sized to the
   frame. Bump a type's `version` when saved values would render differently;
   the compositor warns on a mismatch.
 - `compositor.ts` — **one WebGL context, one canvas per artwork**. Background
-  fill → each visible layer composited bottom to top (ping-pong render
-  targets) by `LAYER_FRAG`: frame transform with rotation, filters (pixelate,
-  mono, invert, posterize, threshold, two-colour dither), mask (another layer's
-  alpha or luminance in its own frame, optionally inverted; a hidden layer
-  still renders if it's a mask source), blend mode → post (grain, vignette).
+  fill → each visible layer stacks its fills into an artwork-sized buffer
+  (`STACK_FRAG`, one pass per fill) → `LAYER_FRAG` lays that buffer onto the
+  artwork bottom to top (ping-pong render targets): shape cut, mask (another
+  layer's finished stack, alpha or luminance, optionally inverted; a hidden
+  layer still stacks if it's a mask source), blend mode → post (grain,
+  vignette).
   Colour stays in sRGB values throughout (no colour management), so blend
   modes behave like a design tool's.
 - Saved layer values are checked with `fit()` against the schema and filled
@@ -73,13 +74,43 @@ Home with a short about and contact links.
   addressed from that artwork only as `local/<name>`. A custom tweak for one
   piece goes there — copy the code it changes rather than editing a built-in,
   so no other artwork moves.
-- **Layers are shapes filled with a shader.** The UI calls layer types
- "shaders": solid/gradient or any experiment. A layer carries these optional fields:
+- **A layer is a shape with lists**, like Paper and Figma. Types are in `document.ts`;
+ `fillsOf`, `filtersOf`, `strokesOf` and `shadowsOf` read every list, including the old fields
+ on layers saved before the lists existed.
+ - `fills`: `FillDoc`s, pixel-making layer types (solid/gradient or any experiment) with
+ `opacity`, `blend` and `fillSpace` (`'canvas'` lays a fill across the whole artwork).
+ - `filters`: `FilterDoc`s (blur, pixelate, mono, invert, posterize, threshold, dither;
+ `FILTERS` in `studioSchemas.ts`) with an `input`:
+ - `'layer'` changes the layer's fills before the cut, so the edge stays crisp.
+ - `'background'` changes the artwork behind the layer, shown inside the shape. A shape
+ with background blur is a lens.
+ - `strokes`: `StrokeDoc`s, bands along the edge (`width`, `align`, `offset`, `fibers`),
+ each **painted with its own fill stack**. Old paper core and stroke became an inside stroke
+ with fibres, then the stroke.
+ - `shadows`: `ShadowDoc`s (offset, blur, colour, opacity), up to 8.
+ - `edge` now only changes the outline: tear and feather.
+ - **Old layers:** `upgrade()` converts a document when the studio opens it, and Save writes
+ lists. Migration must not call `Math.random`: it shifted other layers' seeded random draws
+ and made a render diff look like a regression.
+
+- **Render pipeline per layer** (`compositor.ts`), all in artwork-sized buffers:
+ 1. `DIST_FRAG`: the outline (shape, booleans, tear) as a distance at every pixel, in a
+ HalfFloat buffer. Every later step that needs the edge reads this.
+ 2. `STACK_FRAG` steps: fills laid over → filters (blur is `BLUR_FRAG`, two directions) →
+ cut to the outline → each stroke's paint stacked in its own buffer, then laid in its band.
+ 3. `LAYER_FRAG`: shadows (the distance buffer read at an offset), then the layer, masked and
+ blended over the artwork.
+
+ `field-notes` was checked against a pre-change render: no visible difference, only
+ antialiasing along the torn edge.
+- **Export** (`exporter.ts`): renders in its own offscreen `Compositor` at `scale` × design
+ size and downloads a PNG or JPG. Presets live in `Artwork.exports`. The Export section is in
+ the artwork panel, and ⇧⌘E exports every preset.
+
+ A layer also carries these optional fields:
  - `shape`: a `ShapeDoc` in `shape.ts`. Presets (rect, ellipse, polygon, star) are kept as
  parameters; editing a point converts one to a `path` of cubic Bézier vertices
  in frame fractions. Absent means the frame itself, as an exact rectangle.
- - `fillSpace`: `'canvas'` lays the shader across the whole artwork, so the
- shape is a window onto it.
  - `edge`: tear, paper core, stroke, feather and shadow (`edgeSchema`).
  - `combine`: up to three unify/intersect/subtract/exclude ops against other
  layers' shapes (`combineSchema`). A hidden layer can still be a cutter.
@@ -113,8 +144,23 @@ Home with a short about and contact links.
 
  **A control can carry `when`** (`when(control, values => …)` in
  `lab/controls.ts`). The rows hide it while the test fails, so the inspector
- shows only settings that are in play. The inspector opens Edge, Shadow, Combine, Mask and
- Filters by itself only when the layer uses them.
+ shows only settings that are in play. The inspector opens Edge, Shadow, Combine and Mask
+ by itself only when the layer uses them.
+- **Lists and popovers** (`ui.tsx`):
+ - `SortableList` is a top-first, draggable list. `Popover` is the Figma-style panel: it drags
+ by its header, sits 4px beside what opened it, and nests (a stroke's popover holds a Paint
+ fill list whose own popover opens beside it).
+ - Esc closes the innermost popover, the last `[data-popover]` in the DOM. Clicks inside any
+ popover or on a list row (`data-popover-anchor`) don't close them.
+ - The list components are `Fills.tsx` (`FillList`, reused for stroke paint) and
+ `Appearance.tsx` (`StrokeList`, `ShadowList`, `FilterList` in Paper's type-plus-value rows,
+ `ExportSection`). Shared helpers (`resetGroup`, `blendOptions`, `popoverAt`) live in
+ `tools.ts` for fast refresh.
+ - Clicking a row opens `FillPopover`, a Figma-style panel fixed beside the right sidebar,
+ with the fill's type, layout, input, blend and its own settings.
+ - Esc or a click outside closes it. Its Esc is handled in the capture phase and
+ `preventDefault`ed, and the studio's key handler skips handled keys, so Esc doesn't
+ also deselect.
 - `Studio.tsx` — dev only (`/studio` redirects in production). Drafts autosave
   to localStorage per work (`studio:draft:<slug>`); Revert drops the draft.
   Save POSTs to the dev-server endpoint `/__lab/artwork` (`vite.config.ts`),
@@ -129,6 +175,33 @@ Home with a short about and contact links.
 - **The studio is meant to stand alone later.** It carries its own type:
  `studio.css` and `studio/fonts/` register Inter as `Studio Inter` on the `.studio` root,
  independent of the site's fonts. Keep new studio styling inside `src/studio/`.
+- **The studio has its own light controls**, in `studio/ui.tsx`. They mirror the lab's
+ `ControlRows` API (`Section`, `ControlGroups`, `Rows`, `Row`, `IconButton`), so the dark tilde
+ panel is untouched, and add:
+ - `NumberField`: type a value, use the arrow keys, or drag its prefix to scrub.
+ - `SchemaNumber`, `SelectField`, `TextField`, `TextArea` and `Labeled`.
+ - Slider and swatch CSS in `studio.css`.
+
+ The inspector lays out Layout (X/Y/W/H/rotation) and Blending by hand. Every other group still
+ renders from its schema. Section order is Layout, Blending, Fill, Stroke, Shadow, Filters,
+ Shape, Edge, Combine, Mask.
+- **Selection is a list** (`sel` in `Studio`). Shift-click adds or removes a layer, in the layer
+ list and on the canvas. The last id picked is the primary one.
+ - With more than one selected, `FrameHandles` shows their union box (`boundsOf`), and moving
+ or resizing it remaps every frame (`remap`).
+ - `SelectionInspector` shows the shared Layout and Blending.
+- **Folders.** `Artwork.groups` holds `{id, name}` and `LayerDoc.group` holds membership.
+ - The stack stays flat and a folder's layers are kept next to each other, so rendering
+ ignores folders. Old files load as they are.
+ - `groupLayers`, `ungroupLayers` and `tidyGroups` live in `document.ts`.
+ - Folders are one level deep: grouping layers that are already in a folder moves them to
+ the new one.
+- **Shortcuts** (Figma/Paper basics, all in one handler in `Studio`):
+ - ⌘Z, ⌘G/⌘⇧G, ⌘S, ⌘A, ⌘D, ⌘C/⌘V, ⌘⇧H.
+ - ⌘]/⌘[ steps a layer up or down, and ]/[ sends it to the front or back.
+ - Arrows nudge (Shift for ×10). Delete removes; Esc deselects.
+ - Reordering stays inside the layer's folder, and stepping past another folder hops it
+ whole.
 
 ## Pages
 - `/` Home is **drawn by WebGL with water on it** (`src/home/`).

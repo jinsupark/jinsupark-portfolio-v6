@@ -11,7 +11,8 @@ import {
   Triangle,
   type LucideIcon,
 } from 'lucide-react';
-import type { LayerDoc } from './document';
+import { defaultsOf, type Schema } from '@/lab/controls';
+import { BLEND_MODES, type LayerDoc } from './document';
 import {
   contains,
   flatten,
@@ -109,3 +110,34 @@ export function hitLayer(layers: LayerDoc[], p: P) {
   }
   return null;
 }
+
+// Where a popover opened from `el` goes: beside the panel or popover it was
+// opened from, a few pixels off, level with `el` where the screen allows.
+export const POPOVER_W = 264;
+export function popoverAt(el: Element) {
+  const r = el.getBoundingClientRect();
+  const from = (
+    el.closest('[data-popover]') ?? el.closest('aside')
+  )?.getBoundingClientRect();
+  return {
+    top: Math.max(8, Math.min(r.top - 8, innerHeight - 360)),
+    left: Math.max(8, (from?.left ?? r.left) - POPOVER_W - 4),
+  };
+}
+
+// One group of a schema back to its defaults, the rest untouched.
+export const resetGroup = (
+  schema: Schema,
+  values: Record<string, unknown>,
+  group: string,
+) => {
+  const d = defaultsOf(schema);
+  const next = { ...values };
+  for (const k in schema) if (schema[k].group === group) next[k] = d[k];
+  return next;
+};
+
+export const blendOptions = BLEND_MODES.map((m) => ({
+  value: m,
+  label: m.replace('-', ' '),
+}));

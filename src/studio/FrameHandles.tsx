@@ -18,9 +18,13 @@ type Grip = 'move' | 'nw' | 'ne' | 'sw' | 'se';
 export default function FrameHandles({
   frame,
   onChange,
+  onShiftClick,
 }: {
   frame: Frame;
   onChange: (f: Frame) => void;
+  // A shift-click inside the box, at that artwork point, so it can add or
+  // drop the layer under the pointer instead of starting a move.
+  onShiftClick?: (p: { x: number; y: number }) => void;
 }) {
   const el = useRef<HTMLDivElement>(null);
   const drag = useRef<{
@@ -34,6 +38,13 @@ export default function FrameHandles({
   const down = (e: React.PointerEvent, grip: Grip) => {
     e.stopPropagation();
     const box = el.current!.parentElement!.getBoundingClientRect();
+    if (grip === 'move' && e.shiftKey) {
+      onShiftClick?.({
+        x: ((e.clientX - box.left) / box.width) * DESIGN.w,
+        y: ((e.clientY - box.top) / box.height) * DESIGN.h,
+      });
+      return;
+    }
     drag.current = {
       grip,
       x: e.clientX,

@@ -17,6 +17,86 @@ uniform vec3 uColor;
 out vec4 outColor;
 void main() { outColor = vec4(uColor, 1.0); }`;
 
+// Helpers shared by the layer and fill passes.
+const COMMON = /* glsl */ `
+// Artwork position (design units, y down) into a frame's 0..1 space.
+vec2 toLocal(vec2 p, vec4 f, float r) {
+  vec2 d = p - (f.xy + f.zw * 0.5);
+  float s = sin(-r), c = cos(-r);
+  d = vec2(d.x * c - d.y * s, d.x * s + d.y * c);
+  return (d + f.zw * 0.5) / f.zw;
+}
+// 1 inside the frame, with a one-pixel soft edge so a rotated frame isn't jagged.
+float inside(vec2 l) {
+  vec2 w = fwidth(l);
+  vec2 a = smoothstep(-w * 0.5, w * 0.5, l) * smoothstep(-w * 0.5, w * 0.5, 1.0 - l);
+  return a.x * a.y;
+}
+// Canvas and render-target textures both have v pointing up.
+vec4 sampleIn(sampler2D t, vec2 l) { return texture(t, vec2(l.x, 1.0 - l.y)); }
+
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+float bayer4(vec2 p) {
+  ivec2 i = ivec2(mod(p, 4.0));
+  int m[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+  return (float(m[i.y * 4 + i.x]) + 0.5) / 16.0;
+}
+
+vec3 blend(vec3 b, vec3 s, int mode) {
+  if (mode == 1) return b * s;
+  if (mode == 2) return 1.0 - (1.0 - b) * (1.0 - s);
+  if (mode == 3) return mix(2.0 * b * s, 1.0 - 2.0 * (1.0 - b) * (1.0 - s), step(0.5, b));
+  if (mode == 4) return min(b, s);
+  if (mode == 5) return max(b, s);
+  if (mode == 6) return abs(b - s);
+  if (mode == 7) return b + s - 2.0 * b * s;
+  if (mode == 8) return mix(min(vec3(1.0), b / max(1.0 - s, 1e-4)), vec3(0.0), step(b, vec3(0.0)));
+  if (mode == 9) return mix(1.0 - min(vec3(1.0), (1.0 - b) / max(s, 1e-4)), vec3(1.0), step(vec3(1.0), b));
+  if (mode == 10) return mix(2.0 * b * s, 1.0 - 2.0 * (1.0 - b) * (1.0 - s), step(0.5, s));
+  if (mode == 11) {
+    vec3 d = mix(((16.0 * b - 12.0) * b + 4.0) * b, sqrt(b), step(0.25, b));
+    return mix(b - (1.0 - 2.0 * s) * b * (1.0 - b), b + (2.0 * s - 1.0) * (d - b), step(0.5, s));
+  }
+  if (mode == 12) return min(vec3(1.0), b + s);
+  return s;
+}
+
+float h21(vec2 p) {
+  p = fract(p * vec2(233.34, 851.73));
+  p += dot(p, p + 23.45);
+  return fract(p.x * p.y);
+}
+float vnoise(vec2 x) {
+  vec2 i = floor(x);
+  vec2 f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x),
+             mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y);
+}
+float fbm(vec2 p) {
+  float s = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 5; i++) {
+    s += a * vnoise(p);
+    p = p * 2.07 + vec2(13.1, 7.7);
+    a *= 0.5;
+  }
+  return s;
+}
+
+// Back from a frame's 0..1 space to artwork position.
+vec2 fromLocal(vec2 l, vec4 f, float r) {
+  vec2 d = l * f.zw - f.zw * 0.5;
+  float s = sin(r), c = cos(r);
+  return vec2(d.x * c - d.y * s, d.x * s + d.y * c) + f.xy + f.zw * 0.5;
+}
+// An artwork-sized render target read at artwork position p.
+vec4 atArt(sampler2D t, vec2 p, vec2 design) {
+  return texture(t, vec2(p.x / design.x, 1.0 - p.y / design.y));
+}
+`;
+
 // A shape's signed distance field: design units to the outline, negative
 // inside (nonzero winding, so a lasso that crosses itself stays filled). The
 // outline arrives as a polygon in a one-row float texture; the field covers
@@ -50,24 +130,19 @@ void main() {
   outColor = vec4((wn != 0 ? -1.0 : 1.0) * sqrt(d), 0.0, 0.0, 1.0);
 }`;
 
-// One layer over the composite so far. The layer's shape is a distance field
-// (a texture, or the frame's own rectangle worked out exactly), folded with up
-// to three other shapes, torn by noise anchored to the layer; the fill, paper
-// core and stroke are cut from that, its offset copy is the shadow, and the
-// result is filtered, masked and blended over the base.
-export const LAYER_FRAG = /* glsl */ `
+// A layer's whole outline as a distance at every artwork pixel: its shape (a
+// field texture, or the frame's own rectangle worked out exactly), folded
+// with up to three other shapes, torn by noise anchored to the layer. Every
+// later pass that needs the edge (cut, strokes, shadows) reads this one
+// buffer instead of working the shape out again.
+export const DIST_FRAG = /* glsl */ `
 precision highp float;
-uniform sampler2D uBase;
-uniform sampler2D uLayer;
-uniform sampler2D uMask;
 uniform vec2 uDesign;
 uniform vec4 uFrame;
 uniform float uRot;
 uniform sampler2D uShape;
 uniform int uShapeMode;
 uniform float uPad;
-uniform bool uFillCanvas;
-uniform bool uStyle;
 uniform sampler2D uOp0;
 uniform sampler2D uOp1;
 uniform sampler2D uOp2;
@@ -82,101 +157,9 @@ uniform float uSmooth;
 uniform float uTear;
 uniform float uTearScale;
 uniform float uSeed;
-uniform float uCore;
-uniform float uFibers;
-uniform vec3 uCoreColor;
-uniform float uStroke;
-uniform int uStrokeAlign;
-uniform vec3 uStrokeColor;
-uniform float uFeather;
-uniform float uShadow;
-uniform vec2 uShadowOff;
-uniform float uShadowBlur;
-uniform vec3 uShadowColor;
-uniform vec4 uMaskFrame;
-uniform float uMaskRot;
-uniform int uMaskMode;
-uniform bool uMaskInvert;
-uniform float uOpacity;
-uniform int uBlend;
-uniform float uPixelate;
-uniform bool uMono;
-uniform bool uInvert;
-uniform float uPosterize;
-uniform float uThreshold;
-uniform bool uDither;
-uniform float uDitherScale;
-uniform vec3 uInk;
-uniform vec3 uPaper;
 in vec2 vUv;
 out vec4 outColor;
-
-// Artwork position (design units, y down) into a frame's 0..1 space.
-vec2 toLocal(vec2 p, vec4 f, float r) {
-  vec2 d = p - (f.xy + f.zw * 0.5);
-  float s = sin(-r), c = cos(-r);
-  d = vec2(d.x * c - d.y * s, d.x * s + d.y * c);
-  return (d + f.zw * 0.5) / f.zw;
-}
-// 1 inside the frame, with a one-pixel soft edge so a rotated frame isn't jagged.
-float inside(vec2 l) {
-  vec2 w = fwidth(l);
-  vec2 a = smoothstep(-w * 0.5, w * 0.5, l) * smoothstep(-w * 0.5, w * 0.5, 1.0 - l);
-  return a.x * a.y;
-}
-// Canvas and render-target textures both have v pointing up.
-vec4 sampleIn(sampler2D t, vec2 l) { return texture(t, vec2(l.x, 1.0 - l.y)); }
-
-float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
-
-float bayer4(vec2 p) {
-  ivec2 i = ivec2(mod(p, 4.0));
-  int m[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
-  return (float(m[i.y * 4 + i.x]) + 0.5) / 16.0;
-}
-
-vec3 blend(vec3 b, vec3 s) {
-  if (uBlend == 1) return b * s;
-  if (uBlend == 2) return 1.0 - (1.0 - b) * (1.0 - s);
-  if (uBlend == 3) return mix(2.0 * b * s, 1.0 - 2.0 * (1.0 - b) * (1.0 - s), step(0.5, b));
-  if (uBlend == 4) return min(b, s);
-  if (uBlend == 5) return max(b, s);
-  if (uBlend == 6) return abs(b - s);
-  if (uBlend == 7) return b + s - 2.0 * b * s;
-  if (uBlend == 8) return mix(min(vec3(1.0), b / max(1.0 - s, 1e-4)), vec3(0.0), step(b, vec3(0.0)));
-  if (uBlend == 9) return mix(1.0 - min(vec3(1.0), (1.0 - b) / max(s, 1e-4)), vec3(1.0), step(vec3(1.0), b));
-  if (uBlend == 10) return mix(2.0 * b * s, 1.0 - 2.0 * (1.0 - b) * (1.0 - s), step(0.5, s));
-  if (uBlend == 11) {
-    vec3 d = mix(((16.0 * b - 12.0) * b + 4.0) * b, sqrt(b), step(0.25, b));
-    return mix(b - (1.0 - 2.0 * s) * b * (1.0 - b), b + (2.0 * s - 1.0) * (d - b), step(0.5, s));
-  }
-  if (uBlend == 12) return min(vec3(1.0), b + s);
-  return s;
-}
-
-float h21(vec2 p) {
-  p = fract(p * vec2(233.34, 851.73));
-  p += dot(p, p + 23.45);
-  return fract(p.x * p.y);
-}
-float vnoise(vec2 x) {
-  vec2 i = floor(x);
-  vec2 f = fract(x);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x),
-             mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y);
-}
-float fbm(vec2 p) {
-  float s = 0.0;
-  float a = 0.5;
-  for (int i = 0; i < 5; i++) {
-    s += a * vnoise(p);
-    p = p * 2.07 + vec2(13.1, 7.7);
-    a *= 0.5;
-  }
-  return s;
-}
-
+${COMMON}
 float smin(float a, float b, float k) {
   if (k <= 0.0) return min(a, b);
   float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
@@ -207,8 +190,8 @@ float combine(float d, float e, int kind) {
   return d;
 }
 
-// The layer's whole outline at p, booleans and tear included.
-float shapeD(vec2 p) {
+void main() {
+  vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uDesign;
   float d = sdfOf(uShape, uShapeMode, p, uFrame, uRot, uPad);
   if (uOpKind.x > 0) d = combine(d, sdfOf(uOp0, uOpMode.x, p, uOpFrame0, uOpRot.x, uOpPad.x), uOpKind.x);
   if (uOpKind.y > 0) d = combine(d, sdfOf(uOp1, uOpMode.y, p, uOpFrame1, uOpRot.y, uOpPad.y), uOpKind.y);
@@ -219,83 +202,191 @@ float shapeD(vec2 p) {
     float n = fbm(q * uTearScale + uSeed * 7.13);
     d += (n - 0.5) * 2.4 * uTear;
   }
-  return d;
+  outColor = vec4(d, 0.0, 0.0, 1.0);
+}`;
+
+// One step of building a layer, in artwork space, onto what it has so far
+// (uPrev). Steps, by uOp:
+//  0  a fill: its texture, sampled in its own space, laid over.
+//  1–6 a filter (pixelate, mono, invert, posterize, threshold, dither) on the
+//     layer so far, replacing it, or on the artwork behind (uInput 1), laid
+//     over it.
+//  7  an artwork-space texture (a blur's result), replacing or laid over, as
+//     a filter.
+//  8  the cut: the layer so far, kept to its shape (and feathered).
+//  9  a stroke: its paint (uSrc, artwork space) in a band along the edge,
+//     laid over with its own opacity and blend.
+export const STACK_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D uPrev;
+uniform sampler2D uBase;
+uniform sampler2D uSrc;
+uniform sampler2D uDist;
+uniform vec2 uDesign;
+uniform vec4 uFrame;
+uniform float uRot;
+uniform float uPad;
+// Where a fill's texture lies: 0 the frame, 1 the whole artwork, 2 the frame
+// plus pad (a shape style, kept to that box).
+uniform int uSrcSpace;
+uniform int uOp;
+uniform int uInput;
+// The box pixelate's cells are laid across, and the cells in it.
+uniform vec4 uGrid;
+uniform float uGridRot;
+uniform vec2 uCells;
+uniform float uAmount;
+uniform vec3 uInk;
+uniform vec3 uPaper;
+uniform float uFeather;
+uniform float uWidth;
+uniform int uAlign;
+uniform float uOffset;
+uniform float uFibers;
+uniform float uTearScale;
+uniform float uSeed;
+uniform float uOpacity;
+uniform int uBlend;
+in vec2 vUv;
+out vec4 outColor;
+${COMMON}
+vec4 readInput(vec2 q) {
+  return uInput == 1 ? vec4(atArt(uBase, q, uDesign).rgb, 1.0) : atArt(uPrev, q, uDesign);
 }
 
 void main() {
+  vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uDesign;
+  vec4 prev = texture(uPrev, vUv);
+  vec2 l = toLocal(p, uFrame, uRot);
+  float d = texture(uDist, vUv).r;
+  float aa = max(fwidth(d), 1e-3) * 0.7;
+  bool replace = (uOp >= 1 && uOp <= 7 && uInput == 0) || uOp == 8;
+  vec4 s;
+  if (uOp == 0) {
+    vec2 fl = uSrcSpace == 1 ? p / uDesign
+      : uSrcSpace == 2 ? (l * uFrame.zw + uPad) / (uFrame.zw + 2.0 * uPad)
+      : l;
+    s = sampleIn(uSrc, clamp(fl, 0.0, 1.0));
+    if (uSrcSpace == 2) s.a *= inside(fl);
+  } else if (uOp == 1) {
+    vec2 g = toLocal(p, uGrid, uGridRot);
+    s = readInput(fromLocal((floor(g * uCells) + 0.5) / uCells, uGrid, uGridRot));
+  } else if (uOp == 7) {
+    s = texture(uSrc, vUv);
+  } else if (uOp == 8) {
+    float body = uFeather > 0.0
+      ? smoothstep(uFeather * 0.5 + aa, -uFeather * 0.5 - aa, d)
+      : smoothstep(aa, -aa, d);
+    s = vec4(prev.rgb, prev.a * body);
+  } else if (uOp == 9) {
+    float w = uWidth;
+    if (uFibers > 0.0) {
+      float fib = fbm(l * uFrame.zw * uTearScale * 3.1 + uSeed * 3.7 + 31.0);
+      w *= max(0.05, 1.0 + (fib - 0.5) * 2.0 * uFibers);
+    }
+    float lo = (uAlign == 0 ? -w : uAlign == 2 ? 0.0 : -w * 0.5) + uOffset;
+    float hi = lo + w;
+    s = texture(uSrc, vUv);
+    s.a *= smoothstep(lo - aa, lo + aa, d) * smoothstep(hi + aa, hi - aa, d);
+  } else {
+    s = readInput(p);
+    if (uOp == 2) s.rgb = vec3(luma(s.rgb));
+    if (uOp == 3) s.rgb = 1.0 - s.rgb;
+    if (uOp == 4) s.rgb = floor(s.rgb * uAmount + 0.5) / uAmount;
+    if (uOp == 5) s.rgb = vec3(step(uAmount, luma(s.rgb)));
+    if (uOp == 6) {
+      float t = bayer4(floor(l * uFrame.zw / uAmount));
+      s.rgb = mix(uInk, uPaper, step(t, luma(s.rgb)));
+    }
+  }
+
+  vec3 bl = clamp(blend(prev.rgb, s.rgb, uBlend), 0.0, 1.0);
+  if (replace) {
+    outColor = mix(prev, vec4(bl, s.a), uOpacity);
+  } else {
+    // Laid over: blended only where there's something below.
+    float sa = s.a * uOpacity;
+    vec3 sc = mix(s.rgb, bl, prev.a);
+    float oa = sa + prev.a * (1.0 - sa);
+    vec3 oc = oa > 0.0 ? (sc * sa + prev.rgb * prev.a * (1.0 - sa)) / oa : vec3(0.0);
+    outColor = vec4(oc, oa);
+  }
+}`;
+
+// One direction of a Gaussian blur, `uRadius` pixels each way. Run across,
+// then down. Alpha is blurred with the colour, weighted, so a transparent
+// surround doesn't darken the edge.
+export const BLUR_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D uSrc;
+uniform vec2 uStep;
+uniform float uRadius;
+uniform bool uOpaque;
+in vec2 vUv;
+out vec4 outColor;
+void main() {
+  vec4 acc = vec4(0.0);
+  float wsum = 0.0;
+  float sigma = max(uRadius * 0.5, 0.5);
+  for (int i = -24; i <= 24; i++) {
+    float x = float(i) / 24.0 * uRadius;
+    float w = exp(-0.5 * x * x / (sigma * sigma));
+    vec4 c = texture(uSrc, vUv + uStep * x);
+    if (uOpaque) c.a = 1.0;
+    acc += vec4(c.rgb * c.a, c.a) * w;
+    wsum += w;
+  }
+  acc /= wsum;
+  outColor = vec4(acc.a > 0.0 ? acc.rgb / acc.a : vec3(0.0), acc.a);
+}`;
+
+// One built layer over the composite so far: its shadows (the outline from
+// the distance buffer, offset and softened), then the layer, masked and
+// blended over the base.
+export const LAYER_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D uBase;
+uniform sampler2D uLayer;
+uniform sampler2D uDist;
+uniform sampler2D uMask;
+uniform vec2 uDesign;
+uniform int uShadows;
+uniform vec4 uShadowGeo[8];
+uniform vec4 uShadowColor[8];
+uniform vec4 uMaskFrame;
+uniform float uMaskRot;
+uniform int uMaskMode;
+uniform bool uMaskInvert;
+uniform float uOpacity;
+uniform int uBlend;
+in vec2 vUv;
+out vec4 outColor;
+${COMMON}
+void main() {
   vec3 base = texture(uBase, vUv).rgb;
   vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uDesign;
-  vec2 l = toLocal(p, uFrame, uRot);
-
-  float d = shapeD(p);
-  float aa = max(fwidth(d), 1e-3) * 0.7;
-  float body = uFeather > 0.0
-    ? smoothstep(uFeather * 0.5 + aa, -uFeather * 0.5 - aa, d)
-    : smoothstep(aa, -aa, d);
-
-  float coreM = 0.0;
-  if (uCore > 0.0) {
-    vec2 q = l * uFrame.zw;
-    float fib = fbm(q * uTearScale * 3.1 + uSeed * 3.7 + 31.0);
-    float w = uCore * max(0.05, 1.0 + (fib - 0.5) * 2.0 * uFibers);
-    coreM = body * smoothstep(-aa, aa, d + w);
-  }
-  float strokeM = 0.0;
-  if (uStroke > 0.0) {
-    float lo = uStrokeAlign == 0 ? -uStroke : uStrokeAlign == 2 ? 0.0 : -uStroke * 0.5;
-    float hi = lo + uStroke;
-    strokeM = smoothstep(lo - aa, lo + aa, d) * smoothstep(hi + aa, hi - aa, d);
-  }
-
-  // Where the shader is read from: the frame, the frame plus pad for a shape
-  // style that draws past its outline, or the whole artwork.
-  vec2 fl = uFillCanvas ? p / uDesign
-    : uStyle ? (l * uFrame.zw + uPad) / (uFrame.zw + 2.0 * uPad)
-    : l;
-  vec2 sl = fl;
-  if (uPixelate > 0.0) {
-    vec2 cells = vec2(uPixelate, uPixelate * uFrame.w / uFrame.z);
-    sl = (floor(fl * cells) + 0.5) / cells;
-  }
-  vec4 src = sampleIn(uLayer, clamp(sl, 0.0, 1.0));
-  vec3 c = src.rgb;
-  if (uMono) c = vec3(luma(c));
-  if (uInvert) c = 1.0 - c;
-  if (uPosterize > 0.0) c = floor(c * uPosterize + 0.5) / uPosterize;
-  if (uThreshold > 0.0) c = vec3(step(uThreshold, luma(c)));
-  if (uDither) {
-    float t = bayer4(floor(l * uFrame.zw / uDitherScale));
-    c = mix(uInk, uPaper, step(t, luma(c)));
-  }
-  float a;
-  if (uStyle) {
-    // A shape style draws its own shape; the frame plus pad is its canvas.
-    a = src.a * inside(fl);
-  } else {
-    a = body * src.a;
-    c = mix(c, uCoreColor, coreM);
-    a = max(a, coreM);
-    c = mix(c, uStrokeColor, strokeM);
-    a = max(a, strokeM);
-  }
+  float aa = max(fwidth(texture(uDist, vUv).r), 1e-3) * 0.7;
+  vec4 src = texture(uLayer, vUv);
 
   float mv = 1.0;
   if (uMaskMode > 0) {
     vec2 ml = toLocal(p, uMaskFrame, uMaskRot);
-    vec4 m = sampleIn(uMask, clamp(ml, 0.0, 1.0));
+    vec4 m = texture(uMask, vUv);
     mv = (uMaskMode == 2 ? luma(m.rgb) * m.a : m.a) * inside(ml);
     if (uMaskInvert) mv = 1.0 - mv;
   }
 
-  if (uShadow > 0.0) {
-    float ds = shapeD(p - uShadowOff);
-    float b = uShadowBlur * 0.5 + aa;
-    float sh = uShadow * smoothstep(b, -b, ds) * uOpacity * mv;
-    base = mix(base, uShadowColor, sh);
+  for (int i = 0; i < 8; i++) {
+    if (i >= uShadows) break;
+    vec4 g = uShadowGeo[i];
+    float ds = atArt(uDist, p - g.xy, uDesign).r;
+    float b = g.z * 0.5 + aa;
+    float sh = uShadowColor[i].a * smoothstep(b, -b, ds) * uOpacity * mv;
+    base = mix(base, uShadowColor[i].rgb, sh);
   }
 
-  a *= uOpacity * mv;
-  outColor = vec4(mix(base, clamp(blend(base, c), 0.0, 1.0), a), 1.0);
+  float a = src.a * uOpacity * mv;
+  outColor = vec4(mix(base, clamp(blend(base, src.rgb, uBlend), 0.0, 1.0), a), 1.0);
 }`;
 
 export const POST_FRAG = /* glsl */ `

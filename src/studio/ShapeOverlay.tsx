@@ -73,7 +73,7 @@ export default function ShapeOverlay({
   layers: LayerDoc[];
   layer: LayerDoc | null;
   brush: Brush;
-  onSelect: (id: string | null) => void;
+  onSelect: (id: string | null, additive: boolean) => void;
   onCreate: (tool: Tool, frame: Frame, shape: ShapeDoc) => void;
   onPatch: (id: string, patch: Partial<LayerDoc>) => void;
 }) {
@@ -136,7 +136,7 @@ export default function ShapeOverlay({
     const p = at(e);
     svg.current!.setPointerCapture(e.pointerId);
     if (tool === 'select') {
-      onSelect(hitLayer(layers, p)?.id ?? null);
+      onSelect(hitLayer(layers, p)?.id ?? null, e.shiftKey);
       return;
     }
     if (tool in DRAW_TOOLS) {

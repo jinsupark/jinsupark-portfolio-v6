@@ -1,27 +1,27 @@
+import { Blend, FolderPlus, RotateCw, Trash, X } from 'lucide-react';
+import { defaultsOf, fit } from '@/lab/controls';
+import { FilterList, ShadowList, StrokeList } from './Appearance';
 import {
-  Blend,
-  Brush,
-  Dices,
-  Maximize,
-  RotateCw,
-  Spline,
-  Trash,
-  X,
-} from 'lucide-react';
-import { defaultsOf, fit, type Schema } from '@/lab/controls';
-import { BLEND_MODES, fullFrame, NO_FX, type LayerDoc } from './document';
+  BLEND_MODES,
+  fillsOf,
+  filtersOf,
+  primaryFill,
+  shadowsOf,
+  strokesOf,
+  type Frame,
+  type LayerDoc,
+} from './document';
+import FillList from './Fills';
 import type { LayerType } from './layer';
 import {
   combineSchema,
   compositeSchema,
   edgeSchema,
   frameSchema,
-  fxSchema,
   maskSchema,
-  shaderSchema,
   shapeSchema,
 } from './studioSchemas';
-import type { Tool } from './tools';
+import { resetGroup } from './tools';
 import {
   ControlGroups,
   IconButton,
@@ -31,40 +31,20 @@ import {
   SelectField,
 } from './ui';
 
-const randomSeed = () => 1 + Math.floor(Math.random() * 999);
-
-// One group of a schema back to its defaults, the rest untouched.
-const resetGroup = (
-  schema: Schema,
-  values: Record<string, unknown>,
-  group: string,
-) => {
-  const d = defaultsOf(schema);
-  const next = { ...values };
-  for (const k in schema) if (schema[k].group === group) next[k] = d[k];
-  return next;
-};
-
 export default function Inspector({
   layer,
   layers,
   types,
   onPatch,
-  onRemove,
-  onTool,
 }: {
   layer: LayerDoc;
   layers: LayerDoc[];
   types: Record<string, LayerType>;
   onPatch: (id: string, patch: Partial<LayerDoc>) => void;
-  onRemove: (id: string) => void;
-  onTool: (t: Tool) => void;
 }) {
   const patch = (p: Partial<LayerDoc>) => onPatch(layer.id, p);
-  const type = types[layer.type];
-  const values = type
-    ? { ...defaultsOf(type.schema), ...fit(layer.values, type.schema) }
-    : {};
+  const main = primaryFill(layer);
+  const fillLabel = main ? (types[main.type]?.label ?? main.type) : 'No fill';
   const edge: Record<string, unknown> = {
     ...defaultsOf(edgeSchema),
     ...fit(layer.edge ?? {}, edgeSchema),
@@ -74,20 +54,14 @@ export default function Inspector({
     ...defaultsOf(cs),
     ...fit(layer.combine ?? {}, cs),
   };
-  const fxOn = JSON.stringify(layer.fx) !== JSON.stringify(NO_FX);
-  const edgeOn = ['tear', 'core', 'stroke', 'feather'].some(
-    (k) => Number(edge[k]) > 0,
-  );
-  const shadowOn = Number(edge.shadow) > 0;
+  const edgeOn = Number(edge.tear) > 0 || Number(edge.feather) > 0;
   const combineOn = combine.op1 !== 'none';
   // Groups start shut unless the layer is using them: an edge or a boolean
   // you set up shouldn't hide behind a click. Once toggled, the choice sticks.
   const shut = [
     !edgeOn && 'Edge',
-    !shadowOn && 'Shadow',
     !combineOn && 'Combine',
     !layer.mask.source && 'Mask',
-    !fxOn && 'Filters',
   ].filter(Boolean) as string[];
 
   return (
@@ -96,102 +70,45 @@ export default function Inspector({
         <p className="truncate text-[13px] font-semibold text-neutral-900">
           {layer.name}
         </p>
-        <div className="mt-0.5 flex items-center gap-0.5">
-          <span className="min-w-0 flex-1 truncate text-neutral-500">
-            {type?.label ?? layer.type}
-            {layer.shape ? ` · ${layer.shape.kind}` : ' · frame'}
-          </span>
-          <IconButton title="Edit points (A)" onClick={() => onTool('edit')}>
-            <Spline size={12} />
-          </IconButton>
-          <IconButton title="Smear (S)" onClick={() => onTool('smear')}>
-            <Brush size={12} />
-          </IconButton>
-          <IconButton
-            title="Fill the artwork"
-            onClick={() => patch({ frame: fullFrame() })}
-          >
-            <Maximize size={12} />
-          </IconButton>
-          {type && 'seed' in type.schema && (
-            <IconButton
-              title="Re-seed"
-              onClick={() =>
-                patch({ values: { ...values, seed: randomSeed() } })
-              }
-            >
-              <Dices size={12} />
-            </IconButton>
-          )}
-          <IconButton
-            title="Delete layer"
-            onClick={() => onRemove(layer.id)}
-            className="hover:text-red-500!"
-          >
-            <Trash size={12} />
-          </IconButton>
-        </div>
+        <p className="mt-0.5 truncate text-neutral-500">
+          {fillLabel}
+          {layer.shape ? ` · ${layer.shape.kind}` : ' · frame'}
+        </p>
       </div>
 
-      <ControlGroups
-        id="insp"
-        schema={shaderSchema(types)}
-        values={{ type: layer.type, fillSpace: layer.fillSpace ?? 'shape' }}
-        onChange={(k, v) => {
-          if (k === 'fillSpace')
-            return patch({ fillSpace: v as LayerDoc['fillSpace'] });
-          const t = types[v as string];
-          if (!t || v === layer.type) return;
-          // Keep a name the user gave it; follow the shader otherwise.
-          const named = layer.name !== type?.label;
-          patch({
-            type: v as string,
-            version: t.version,
-            values: { ...t.initial() },
-            ...(!named && { name: t.label }),
-          });
+      <LayoutSection
+        frame={layer.frame}
+        onFrame={(frame) => patch({ frame })}
+      />
+      <BlendingSection
+        opacity={layer.opacity}
+        blend={layer.blend}
+        onPatch={patch}
+      />
+      <FillList
+        fills={fillsOf(layer)}
+        onFills={(fills) => patch({ fills })}
+        types={types}
+        onRetype={(f, from, to) => {
+          // Keep a name the user gave the layer; follow its main fill
+          // otherwise.
+          if (main?.id === f.id && layer.name === from?.label)
+            patch({ name: to.label });
         }}
       />
-      <Section id="insp:Transform" title="Layout">
-        <div className="grid grid-cols-2 gap-1.5">
-          {(['x', 'y', 'w', 'h'] as const).map((k) => (
-            <SchemaNumber
-              key={k}
-              control={frameSchema[k]}
-              value={layer.frame[k]}
-              onChange={(v) => patch({ frame: { ...layer.frame, [k]: v } })}
-              prefix={k.toUpperCase()}
-            />
-          ))}
-          <SchemaNumber
-            control={frameSchema.rot}
-            value={layer.frame.rot}
-            onChange={(rot) => patch({ frame: { ...layer.frame, rot } })}
-            prefix={<RotateCw size={11} />}
-            suffix="°"
-          />
-        </div>
-      </Section>
-      <Section id="insp:Appearance" title="Blending">
-        <div className="grid grid-cols-2 gap-1.5">
-          <SchemaNumber
-            control={compositeSchema.opacity}
-            value={layer.opacity}
-            onChange={(opacity) => patch({ opacity })}
-            factor={100}
-            prefix={<Blend size={11} />}
-            suffix="%"
-          />
-          <SelectField
-            value={layer.blend}
-            options={BLEND_MODES.map((m) => ({
-              value: m,
-              label: m.replace('-', ' '),
-            }))}
-            onChange={(v) => patch({ blend: v as LayerDoc['blend'] })}
-          />
-        </div>
-      </Section>
+      <StrokeList
+        strokes={strokesOf(layer)}
+        onStrokes={(strokes) => patch({ strokes })}
+        types={types}
+      />
+      <ShadowList
+        shadows={shadowsOf(layer)}
+        onShadows={(shadows) => patch({ shadows })}
+      />
+      <FilterList
+        filters={filtersOf(layer)}
+        onFilters={(filters) => patch({ filters })}
+      />
       {layer.shape && (
         <Section
           id="insp:Shape"
@@ -248,31 +165,123 @@ export default function Inspector({
           })
         }
       />
-      <ControlGroups
-        id="insp"
-        schema={fxSchema}
-        values={layer.fx}
-        closed={shut}
-        onChange={(k, v) => patch({ fx: { ...layer.fx, [k]: v } })}
-        onReset={() => patch({ fx: { ...NO_FX } })}
-      />
+    </>
+  );
+}
 
-      {type && (
-        <>
-          <p className="border-b border-black/6 bg-black/3 px-3 pt-4 pb-1.5 font-medium text-neutral-500">
-            {type.label}
-          </p>
-          <ControlGroups
-            id={`insp:type:${layer.type}`}
-            schema={type.schema}
-            values={values}
-            onChange={(k, v) => patch({ values: { ...values, [k]: v } })}
-            onReset={(g) =>
-              patch({ values: resetGroup(type.schema, values, g) })
-            }
+function LayoutSection({
+  frame,
+  onFrame,
+  rotate = true,
+}: {
+  frame: Frame;
+  onFrame: (f: Frame) => void;
+  rotate?: boolean;
+}) {
+  return (
+    <Section id="insp:Transform" title="Layout">
+      <div className="grid grid-cols-2 gap-1.5">
+        {(['x', 'y', 'w', 'h'] as const).map((k) => (
+          <SchemaNumber
+            key={k}
+            control={frameSchema[k]}
+            value={frame[k]}
+            onChange={(v) => onFrame({ ...frame, [k]: v })}
+            prefix={k.toUpperCase()}
           />
-        </>
-      )}
+        ))}
+        {rotate && (
+          <SchemaNumber
+            control={frameSchema.rot}
+            value={frame.rot}
+            onChange={(rot) => onFrame({ ...frame, rot })}
+            prefix={<RotateCw size={11} />}
+            suffix="°"
+          />
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function BlendingSection({
+  opacity,
+  blend,
+  onPatch,
+}: {
+  opacity: number;
+  blend: string;
+  onPatch: (p: Partial<LayerDoc>) => void;
+}) {
+  return (
+    <Section id="insp:Appearance" title="Blending">
+      <div className="grid grid-cols-2 gap-1.5">
+        <SchemaNumber
+          control={compositeSchema.opacity}
+          value={opacity}
+          onChange={(opacity) => onPatch({ opacity })}
+          factor={100}
+          prefix={<Blend size={11} />}
+          suffix="%"
+        />
+        <SelectField
+          value={blend}
+          options={[
+            ...(blend ? [] : [{ value: '', label: 'mixed' }]),
+            ...BLEND_MODES.map((m) => ({
+              value: m,
+              label: m.replace('-', ' '),
+            })),
+          ]}
+          onChange={(v) => onPatch({ blend: v as LayerDoc['blend'] })}
+        />
+      </div>
+    </Section>
+  );
+}
+
+// More than one layer selected: their shared box and blending, and actions on
+// the lot. Moving or resizing the box carries every layer along.
+export function SelectionInspector({
+  layers,
+  box,
+  onBox,
+  onPatch,
+  onGroup,
+  onRemove,
+}: {
+  layers: LayerDoc[];
+  box: Frame;
+  onBox: (f: Frame) => void;
+  onPatch: (p: Partial<LayerDoc>) => void;
+  onGroup: () => void;
+  onRemove: () => void;
+}) {
+  const same = <T,>(f: (l: LayerDoc) => T) =>
+    layers.every((l) => f(l) === f(layers[0])) ? f(layers[0]) : undefined;
+  return (
+    <>
+      <div className="flex items-center gap-0.5 border-b border-black/6 px-3 pt-3 pb-2">
+        <p className="min-w-0 flex-1 truncate text-[13px] font-semibold text-neutral-900">
+          {layers.length} layers
+        </p>
+        <IconButton title="Group into a folder (⌘G)" onClick={onGroup}>
+          <FolderPlus size={12} />
+        </IconButton>
+        <IconButton
+          title="Delete layers"
+          onClick={onRemove}
+          className="hover:text-red-500!"
+        >
+          <Trash size={12} />
+        </IconButton>
+      </div>
+      <LayoutSection frame={box} onFrame={onBox} rotate={false} />
+      <BlendingSection
+        opacity={same((l) => l.opacity) ?? layers[0].opacity}
+        blend={same((l) => l.blend) ?? ''}
+        onPatch={onPatch}
+      />
     </>
   );
 }
