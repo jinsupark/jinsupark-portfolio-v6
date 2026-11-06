@@ -1,11 +1,23 @@
 import { Suspense } from 'react';
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { EXPERIMENTS } from '@/experiments/registry';
+import { SHADER_TYPES } from '@/studio/shaders';
 
 export const Route = createFileRoute('/experiments/$slug')({
   beforeLoad: ({ params }) => {
+    // An experiment that's also a shader opens in the shader playground.
+    if (SHADER_TYPES[params.slug])
+      throw redirect({
+        to: '/shaders/$type',
+        params: { type: params.slug },
+        replace: true,
+      });
     if (!EXPERIMENTS.some((e) => e.slug === params.slug))
-      throw redirect({ to: '/experiments', replace: true });
+      throw redirect({
+        to: '/projects',
+        search: { tab: 'experiments' },
+        replace: true,
+      });
   },
   component: ExperimentPage,
 });

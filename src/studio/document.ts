@@ -81,19 +81,34 @@ export type FilterDoc = {
   input: 'layer' | 'background';
 };
 
-// A band along the shape's edge, painted with its own fills. `fibers`
-// wobbles its width like a torn sheet's paper core.
+// A band along the shape's edge, painted with its own fills. Its `type` is
+// a key of `STROKES` in `studioSchemas.ts`: a plain line, or paper fibres,
+// whose width wobbles by `fibers` like a torn sheet's paper core.
 export type StrokeDoc = {
   id: string;
+  type: string;
   visible: boolean;
   width: number;
   align: 'inside' | 'center' | 'outside';
   // Moves the band outward (negative: inward), in design units.
   offset: number;
+  // Which part of the outline it runs along: all of it, or the side facing
+  // one way (split corner to corner, like Figma's per-side strokes).
+  sides?: 'all' | 'top' | 'bottom' | 'left' | 'right';
   fibers: number;
   opacity: number;
   blend: BlendMode;
   fills: FillDoc[];
+};
+
+// A change to the outline itself (a tear, a feather). Everything follows the
+// changed outline: fills, borders, shadows. Its `type` is a key of `OUTLINES`
+// in `studioSchemas.ts`. Tears add up, so a coarse and a fine one stack.
+export type OutlineDoc = {
+  id: string;
+  type: string;
+  visible: boolean;
+  values: Record<string, unknown>;
 };
 
 // The shape, offset and softened, laid under the layer.
@@ -111,6 +126,9 @@ export type LayerDoc = {
   id: string;
   name: string;
   visible: boolean;
+  // Locked layers can't be picked, boxed or moved on the canvas; select one
+  // in the layer list to edit it.
+  locked?: boolean;
   frame: Frame;
   opacity: number;
   blend: BlendMode;
@@ -121,6 +139,7 @@ export type LayerDoc = {
   filters?: FilterDoc[];
   strokes?: StrokeDoc[];
   shadows?: ShadowDoc[];
+  outline?: OutlineDoc[];
   // Before fills: one pixel-making type, its values and filters.
   type?: string;
   version?: number;
@@ -129,17 +148,71 @@ export type LayerDoc = {
   fillSpace?: 'shape' | 'canvas';
   // The outline the fills are cut to. Absent is the whole frame.
   shape?: ShapeDoc;
-  // Changes to the outline itself (tear, feather) and booleans, each checked
-  // against its schema in `studioSchemas.ts` (`edgeSchema`, `combineSchema`).
-  // Older layers also kept their paper core, stroke and shadow here.
+  // Older layers' tear, feather, paper core, stroke and shadow, now read
+  // through `outlineOf`, `strokesOf` and `shadowsOf`.
   edge?: Record<string, unknown>;
+  // Booleans with other layers' shapes, checked against `combineSchema`.
   combine?: Record<string, unknown>;
   // The folder this layer sits in, by `GroupDoc` id. A folder's layers are
   // kept next to each other in the stack. Folders don't change rendering.
   group?: string;
 };
 
-export type GroupDoc = { id: string; name: string };
+// A folder. Like a layer it can be blended, filtered, masked and shadowed as
+// one: its layers are composited together first, then laid on what's below.
+// A folder with none of that set is free; it only organises. Folders nest
+// through `parent`, and every layer under a folder sits in one block of the
+// stack.
+export type GroupDoc = {
+  id: string;
+  name: string;
+  parent?: string;
+  visible?: boolean;
+  locked?: boolean;
+  opacity?: number;
+  blend?: BlendMode;
+  filters?: FilterDoc[];
+  shadows?: ShadowDoc[];
+  mask?: Mask;
+};
+
+// The id a folder goes by in a selection, beside layer ids.
+export const folderKey = (id: string) => `g:${id}`;
+export const isFolderKey = (k: string) => k.startsWith('g:');
+
+// A layer's folders, outermost first.
+export function chainOf(d: Pick<Artwork, 'groups'>, l: LayerDoc): GroupDoc[] {
+  const byId = new Map((d.groups ?? []).map((g) => [g.id, g]));
+  const out: GroupDoc[] = [];
+  const seen = new Set<string>();
+  for (let g = l.group && byId.get(l.group); g && !seen.has(g.id);) {
+    seen.add(g.id);
+    out.unshift(g);
+    g = g.parent ? byId.get(g.parent) : undefined;
+  }
+  return out;
+}
+
+// Every layer under a folder, nested ones included.
+export const layersIn = (d: Artwork, groupId: string) =>
+  d.layers.filter((l) => chainOf(d, l).some((g) => g.id === groupId));
+
+// A selection's layers: folder keys stand for every layer under them.
+export function layersOf(d: Artwork, keys: string[]): string[] {
+  const out = new Set<string>();
+  for (const k of keys)
+    if (isFolderKey(k)) for (const l of layersIn(d, k.slice(2))) out.add(l.id);
+    else out.add(k);
+  return [...out];
+}
+
+// A folder with nothing set only organises, and costs nothing to draw.
+export const plainFolder = (g: GroupDoc) =>
+  (g.opacity ?? 1) === 1 &&
+  (g.blend ?? 'normal') === 'normal' &&
+  !g.filters?.some((f) => f.visible) &&
+  !g.shadows?.some((s) => s.visible) &&
+  !g.mask?.source;
 
 export type Post = { grain: number; grainSize: number; vignette: number };
 
@@ -156,20 +229,67 @@ export type Artwork = {
   post: Post;
   // Export presets: each is the whole artwork at a scale of its design size.
   exports?: ExportDoc[];
+  // The studio's background round the artwork (the artwork's own colour is
+  // `background`, labelled Canvas); not part of the artwork itself.
+  surround?: string;
+  // The canvas in design units. Absent is `DESIGN` (800×1000, 4:5), which is
+  // what every artwork saved before sizes existed was made at.
+  size?: Size;
 };
+
+export type Size = { w: number; h: number };
+export const sizeOf = (d: Pick<Artwork, 'size'>): Size => d.size ?? DESIGN;
+
+// Canvas presets, long side 1000 design units (4:5 is the original 800×1000).
+export const ASPECTS: { label: string; size: Size }[] = [
+  { label: '4:5', size: { w: 800, h: 1000 } },
+  { label: '1:1', size: { w: 1000, h: 1000 } },
+  { label: '3:4', size: { w: 750, h: 1000 } },
+  { label: '2:3', size: { w: 667, h: 1000 } },
+  { label: '9:16', size: { w: 563, h: 1000 } },
+  { label: '16:9', size: { w: 1000, h: 563 } },
+  { label: '3:2', size: { w: 1000, h: 667 } },
+];
+
+// A new canvas size, with the layers staying where they are, like resizing a
+// frame in Figma. A layer that filled the old canvas fills the new one.
+export function resizeArtwork(d: Artwork, size: Size): Artwork {
+  const old = sizeOf(d);
+  const full = (f: Frame) =>
+    f.x === 0 && f.y === 0 && f.w === old.w && f.h === old.h && f.rot === 0;
+  return {
+    ...d,
+    size,
+    layers: d.layers.map((l) =>
+      full(l.frame) ? { ...l, frame: fullFrame(size) } : l,
+    ),
+  };
+}
 
 export type ExportDoc = { id: string; scale: number; format: 'png' | 'jpg' };
 export const DEFAULT_EXPORTS: ExportDoc[] = [
   { id: 'default', scale: 2, format: 'png' },
 ];
 
-// The union of the frames' unrotated boxes, or null for none.
+// The box round the frames as they sit on the artwork (rotation included),
+// or null for none.
 export function boundsOf(frames: Frame[]): Frame | null {
   if (!frames.length) return null;
-  const x0 = Math.min(...frames.map((f) => f.x));
-  const y0 = Math.min(...frames.map((f) => f.y));
-  const x1 = Math.max(...frames.map((f) => f.x + f.w));
-  const y1 = Math.max(...frames.map((f) => f.y + f.h));
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const f of frames) {
+    const r = (f.rot * Math.PI) / 180;
+    const w = Math.abs(f.w * Math.cos(r)) + Math.abs(f.h * Math.sin(r));
+    const h = Math.abs(f.w * Math.sin(r)) + Math.abs(f.h * Math.cos(r));
+    const cx = f.x + f.w / 2;
+    const cy = f.y + f.h / 2;
+    x0 = Math.min(x0, cx - w / 2);
+    y0 = Math.min(y0, cy - h / 2);
+    x1 = Math.max(x1, cx + w / 2);
+    y1 = Math.max(y1, cy + h / 2);
+  }
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, rot: 0 };
 }
 
@@ -188,41 +308,105 @@ export function remap(f: Frame, from: Frame, to: Frame): Frame {
 
 // Put `ids` in a new folder, gathered into one block where the topmost of
 // them sits, in their stacking order.
-export function groupLayers(d: Artwork, ids: string[], name: string): Artwork {
-  const set = new Set(ids);
+// Put the selection in a new folder, inside the folders they share. A folder
+// whose layers are all selected goes in whole (so folders nest); other layers
+// move in on their own. They're gathered into one block where the topmost of
+// them sits, in their stacking order.
+export function groupLayers(d: Artwork, keys: string[], name: string): Artwork {
+  const ids = new Set(layersOf(d, keys));
+  if (!ids.size) return d;
   const id = layerId();
-  const top = Math.max(...d.layers.flatMap((l, i) => (set.has(l.id) ? i : [])));
-  const picked = d.layers.filter((l) => set.has(l.id));
-  const rest = d.layers.filter((l) => !set.has(l.id));
+  const chains = d.layers
+    .filter((l) => ids.has(l.id))
+    .map((l) => chainOf(d, l));
+  // The deepest folder every selected layer is inside.
+  let common: GroupDoc | undefined;
+  for (let i = 0; ; i++) {
+    const g = chains[0][i];
+    if (!g || chains.some((c) => c[i]?.id !== g.id)) break;
+    common = g;
+  }
+  const depth = common
+    ? chains[0].findIndex((g) => g.id === common!.id) + 1
+    : 0;
+  // Folders right under the common one, taken whole if all their layers are
+  // selected.
+  const whole = new Set<string>();
+  for (const c of chains) {
+    const g = c[depth];
+    if (g && layersIn(d, g.id).every((l) => ids.has(l.id))) whole.add(g.id);
+  }
+  const top = Math.max(...d.layers.flatMap((l, i) => (ids.has(l.id) ? i : [])));
+  const picked = d.layers
+    .filter((l) => ids.has(l.id))
+    .map((l) => {
+      const g = chainOf(d, l)[depth];
+      return g && whole.has(g.id) ? l : { ...l, group: id };
+    });
+  const rest = d.layers.filter((l) => !ids.has(l.id));
   const at = rest.length - (d.layers.length - 1 - top);
-  rest.splice(at, 0, ...picked.map((l) => ({ ...l, group: id })));
+  rest.splice(at, 0, ...picked);
   return tidyGroups({
     ...d,
     layers: rest,
-    groups: [...(d.groups ?? []), { id, name }],
+    groups: [
+      ...(d.groups ?? []).map((g) =>
+        whole.has(g.id) ? { ...g, parent: id } : g,
+      ),
+      { id, name, ...(common && { parent: common.id }) },
+    ],
   });
 }
 
-export function ungroupLayers(d: Artwork, ids: string[]): Artwork {
-  const set = new Set(ids);
+// Take selected layers up out of their folder, or dissolve selected folders
+// into their parent.
+export function ungroupLayers(d: Artwork, keys: string[]): Artwork {
+  const groups = d.groups ?? [];
+  const byId = new Map(groups.map((g) => [g.id, g]));
+  const gone = new Set(keys.filter(isFolderKey).map((k) => k.slice(2)));
+  const up = (gid?: string) => {
+    let g = gid ? byId.get(gid) : undefined;
+    while (g && gone.has(g.id)) g = g.parent ? byId.get(g.parent) : undefined;
+    return g?.id;
+  };
+  const set = new Set(keys);
   return tidyGroups({
     ...d,
-    layers: d.layers.map((l) =>
-      set.has(l.id) ? { ...l, group: undefined } : l,
-    ),
+    layers: d.layers.map((l) => {
+      if (set.has(l.id))
+        return { ...l, group: up(byId.get(l.group ?? '')?.parent) };
+      return l.group && gone.has(l.group) ? { ...l, group: up(l.group) } : l;
+    }),
+    groups: groups
+      .filter((g) => !gone.has(g.id))
+      .map((g) =>
+        g.parent && gone.has(g.parent) ? { ...g, parent: up(g.parent) } : g,
+      ),
   });
 }
 
-// Drop folders with no layers left, and memberships of folders that are gone.
+// Drop folders with no layers under them, and links to folders that are gone.
 export function tidyGroups(d: Artwork): Artwork {
-  const used = new Set(d.layers.map((l) => l.group));
-  const groups = (d.groups ?? []).filter((g) => used.has(g.id));
-  const known = new Set(groups.map((g) => g.id));
+  const all = d.groups ?? [];
+  const byId = new Map(all.map((g) => [g.id, g]));
+  const used = new Set<string>();
+  for (const l of d.layers) {
+    let g = l.group ? byId.get(l.group) : undefined;
+    while (g && !used.has(g.id)) {
+      used.add(g.id);
+      g = g.parent ? byId.get(g.parent) : undefined;
+    }
+  }
+  const groups = all
+    .filter((g) => used.has(g.id))
+    .map((g) =>
+      g.parent && !used.has(g.parent) ? { ...g, parent: undefined } : g,
+    );
   return {
     ...d,
     groups,
     layers: d.layers.map((l) =>
-      l.group && !known.has(l.group) ? { ...l, group: undefined } : l,
+      l.group && !used.has(l.group) ? { ...l, group: undefined } : l,
     ),
   };
 }
@@ -239,11 +423,11 @@ export const NO_FX: LayerFx = {
   paper: '#f2f0eb',
 };
 
-export const fullFrame = (): Frame => ({
+export const fullFrame = (size: Size = DESIGN): Frame => ({
   x: 0,
   y: 0,
-  w: DESIGN.w,
-  h: DESIGN.h,
+  w: size.w,
+  h: size.h,
   rot: 0,
 });
 
@@ -284,17 +468,23 @@ export const solidFill = (color: string, id = layerId()): FillDoc => ({
   blend: 'normal',
 });
 
-export const newStroke = (id = layerId()): StrokeDoc => ({
+export const newStroke = (type = 'line', id = layerId()): StrokeDoc => ({
   id,
+  type,
   visible: true,
-  width: 2,
-  align: 'center',
+  width: type === 'fibres' ? 12 : 2,
+  align: type === 'fibres' ? 'inside' : 'center',
   offset: 0,
-  fibers: 0,
+  fibers: type === 'fibres' ? 0.6 : 0,
   opacity: 1,
   blend: 'normal',
-  fills: [solidFill('#111111', `${id}-fill`)],
+  fills: [solidFill(type === 'fibres' ? '#f8f5ee' : '#111111', `${id}-fill`)],
 });
+
+export const newOutline = (
+  type: string,
+  values: Record<string, unknown>,
+): OutlineDoc => ({ id: layerId(), type, visible: true, values });
 
 export const newShadow = (): ShadowDoc => ({
   id: layerId(),
@@ -398,12 +588,16 @@ export const filtersOf = memo((l): FilterDoc[] => {
 // The layer's strokes. An older layer's paper core is an inside stroke with
 // fibres, under its stroke, as the old layer pass drew them.
 export const strokesOf = memo((l): StrokeDoc[] => {
-  if (l.strokes) return l.strokes;
+  // Strokes from before types existed: fibres if they had any.
+  if (l.strokes)
+    return l.strokes.map((s) =>
+      s.type ? s : { ...s, type: s.fibers > 0 ? 'fibres' : 'line' },
+    );
   const e = oldEdge(l);
   const out: StrokeDoc[] = [];
   if (Number(e.core) > 0)
     out.push({
-      ...newStroke(`${l.id}-core`),
+      ...newStroke('fibres', `${l.id}-core`),
       width: Number(e.core),
       align: 'inside',
       fibers: Number(e.fibers),
@@ -411,7 +605,7 @@ export const strokesOf = memo((l): StrokeDoc[] => {
     });
   if (Number(e.stroke) > 0)
     out.push({
-      ...newStroke(`${l.id}-stroke`),
+      ...newStroke('line', `${l.id}-stroke`),
       width: Number(e.stroke),
       align: e.strokeAlign as StrokeDoc['align'],
       fills: [solidFill(String(e.strokeColor), `${l.id}-stroke-fill`)],
@@ -437,6 +631,33 @@ export const shadowsOf = memo((l): ShadowDoc[] => {
     : [];
 });
 
+// The layer's outline effects. Older layers kept one tear and one feather in
+// `edge`.
+export const outlineOf = memo((l): OutlineDoc[] => {
+  if (l.outline) return l.outline;
+  const e = l.edge ?? {};
+  const out: OutlineDoc[] = [];
+  if (Number(e.tear) > 0)
+    out.push({
+      id: `${l.id}-tear`,
+      type: 'tear',
+      visible: true,
+      values: {
+        amount: Number(e.tear),
+        scale: Number(e.tearScale ?? 0.06),
+        seed: Number(e.seed ?? 1),
+      },
+    });
+  if (Number(e.feather) > 0)
+    out.push({
+      id: `${l.id}-feather`,
+      type: 'feather',
+      visible: true,
+      values: { amount: Number(e.feather) },
+    });
+  return out;
+});
+
 // A layer in today's form, with none of the fields its lists replaced.
 export function upgradeLayer(l: LayerDoc): LayerDoc {
   const out: LayerDoc = {
@@ -445,20 +666,54 @@ export function upgradeLayer(l: LayerDoc): LayerDoc {
     filters: filtersOf(l),
     strokes: strokesOf(l),
     shadows: shadowsOf(l),
+    outline: outlineOf(l),
   };
   for (const k of ['type', 'version', 'values', 'fx', 'fillSpace'] as const)
     delete out[k];
-  if (l.edge) {
-    const edge = { ...l.edge };
-    for (const k of Object.keys(OLD_EDGE)) delete edge[k];
-    out.edge = edge;
-  }
+  delete out.edge;
   return out;
 }
-export const upgrade = (d: Artwork): Artwork => ({
-  ...d,
-  layers: d.layers.map(upgradeLayer),
-});
+// An artwork in today's form. Its old post processing (grain, vignette)
+// becomes a top layer whose filters work on everything behind it.
+export function upgrade(d: Artwork): Artwork {
+  const layers = d.layers.map(upgradeLayer);
+  const p = d.post ?? { grain: 0, grainSize: 1, vignette: 0 };
+  if (p.grain > 0 || p.vignette > 0) {
+    const filters: FilterDoc[] = [];
+    if (p.grain > 0)
+      filters.push({
+        id: 'post-grain',
+        type: 'grain',
+        visible: true,
+        values: { amount: p.grain, size: p.grainSize },
+        input: 'background',
+      });
+    if (p.vignette > 0)
+      filters.push({
+        id: 'post-vignette',
+        type: 'vignette',
+        visible: true,
+        values: { amount: p.vignette },
+        input: 'background',
+      });
+    layers.push({
+      id: 'post',
+      name: 'Grain & vignette',
+      visible: true,
+      locked: true,
+      frame: fullFrame(sizeOf(d)),
+      opacity: 1,
+      blend: 'normal',
+      mask: { source: null, mode: 'alpha', invert: false },
+      fills: [],
+      filters,
+      strokes: [],
+      shadows: [],
+      outline: [],
+    });
+  }
+  return { ...d, layers, post: { grain: 0, grainSize: 1, vignette: 0 } };
+}
 
 // The fill a layer is named and listed by: its topmost one.
 export const primaryFill = (l: LayerDoc) => fillsOf(l).at(-1);

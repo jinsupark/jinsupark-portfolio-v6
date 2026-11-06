@@ -1,24 +1,24 @@
 import { Link, useNavigate } from '@tanstack/react-router';
-import {
-  ArrowLeft,
-  ChevronDown,
-  FilePlus,
-  LayoutGrid,
-  RotateCcw,
-  Save,
-} from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { defaultsOf, fit } from '@/lab/controls';
 import { WORKS, workOf } from '@/works';
 import ArtworkPlayer from './ArtworkPlayer';
+import ArtworkTitle from './ArtworkTitle';
 import type { Compositor } from './compositor';
 import {
   DOC_VERSION,
   SLUG,
+  ASPECTS,
   boundsOf,
+  chainOf,
+  folderKey,
+  isFolderKey,
+  layersOf,
   DEFAULT_EXPORTS,
   fillsOf,
   filtersOf,
+  outlineOf,
   shadowsOf,
   strokesOf,
   fullFrame,
@@ -27,6 +27,8 @@ import {
   newArtwork,
   newFill,
   remap,
+  resizeArtwork,
+  sizeOf,
   tidyGroups,
   ungroupLayers,
   upgrade,
@@ -34,13 +36,14 @@ import {
   type Artwork,
   type Frame,
   type FillDoc,
+  type GroupDoc,
   type LayerDoc,
   type StrokeDoc,
 } from './document';
 import FrameHandles from './FrameHandles';
 import { ExportSection } from './Appearance';
 import { download, exportName, renderArtwork } from './exporter';
-import Inspector, { SelectionInspector } from './Inspector';
+import Inspector, { FolderInspector, SelectionInspector } from './Inspector';
 import LayerList from './LayerList';
 import { layerTypesFor } from './registry';
 import type { ShapeDoc } from './shape';
@@ -49,7 +52,7 @@ import {
   artworkSchema,
   brushSchema,
   combineSchema,
-  edgeSchema,
+  OUTLINES,
   FILTERS,
   shadowSchema,
   strokeSchema,
@@ -65,13 +68,58 @@ import {
 } from './tools';
 import {
   ControlGroups,
-  IconButton,
   Labeled,
+  NumberField,
+  PanelHeader,
+  ResizeHandle,
+  SelectField,
   Section,
-  TextArea,
-  TextField,
 } from './ui';
 import './studio.css';
+
+const slugify = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+// Line the selected layers' boxes up on the selection's box, or spread them
+// so the gaps between them are equal. Locked layers stay put.
+function alignLayers(layers: LayerDoc[], ids: string[], how: string) {
+  const moving = layers.filter((l) => ids.includes(l.id) && !l.locked);
+  const box = boundsOf(moving.map((l) => l.frame));
+  if (!box || moving.length < 2) return layers;
+  const next = new Map<string, Frame>();
+  if (how === 'hspace' || how === 'vspace') {
+    const x = how === 'hspace';
+    const sorted = [...moving].sort((a, b) =>
+      x ? a.frame.x - b.frame.x : a.frame.y - b.frame.y,
+    );
+    const total = sorted.reduce((t, l) => t + (x ? l.frame.w : l.frame.h), 0);
+    const gap = ((x ? box.w : box.h) - total) / (sorted.length - 1);
+    let at = x ? box.x : box.y;
+    for (const l of sorted) {
+      next.set(l.id, { ...l.frame, [x ? 'x' : 'y']: Math.round(at) });
+      at += (x ? l.frame.w : l.frame.h) + gap;
+    }
+  } else
+    for (const l of moving) {
+      const f = l.frame;
+      const pos: Partial<Frame> =
+        {
+          left: { x: box.x },
+          hcenter: { x: box.x + (box.w - f.w) / 2 },
+          right: { x: box.x + box.w - f.w },
+          top: { y: box.y },
+          vcenter: { y: box.y + (box.h - f.h) / 2 },
+          bottom: { y: box.y + box.h - f.h },
+        }[how] ?? {};
+      next.set(l.id, { ...f, ...pos });
+    }
+  return layers.map((l) =>
+    next.has(l.id) ? { ...l, frame: next.get(l.id)! } : l,
+  );
+}
 
 const SHAPE_NAMES: Partial<Record<Tool, string>> = {
   rect: 'Rectangle',
@@ -80,6 +128,7 @@ const SHAPE_NAMES: Partial<Record<Tool, string>> = {
   polygon: 'Polygon',
   star: 'Star',
   pen: 'Drawing',
+  bezier: 'Path',
 };
 
 // Edits closer together than this are one step of undo, so a drag is one.
@@ -107,10 +156,16 @@ export default function Studio({ work }: { work?: string }) {
   const [doc, setDoc] = useState(() => initialDoc(work));
   // The selected layers in the order they were picked; the last is the one
   // the inspector and the point tools work on.
+  // Starts on the topmost layer you can edit (not a locked one).
   const [sel, setSel] = useState<string[]>(() =>
-    doc.layers.slice(-1).map((l) => l.id),
+    doc.layers
+      .filter((l) => !l.locked)
+      .slice(-1)
+      .map((l) => l.id),
   );
   const selected = sel.at(-1) ?? null;
+  // The layer the pointer is over in the layer list, outlined on the canvas.
+  const [hovered, setHovered] = useState<string | null>(null);
   const setSelected = (id: string | null) => setSel(id ? [id] : []);
   // Shift-click: add a layer to the selection, or take it out.
   const pick = (ids: string[], additive: boolean) =>
@@ -122,6 +177,22 @@ export default function Studio({ work }: { work?: string }) {
         : [...s.filter((id) => !ids.includes(id)), ...ids];
     });
   const [status, setStatus] = useState('');
+  // The sidebars' widths, dragged at their inner edges and remembered.
+  const [widths, setWidths] = useState<{ left: number; right: number }>(() => {
+    try {
+      const w = JSON.parse(localStorage.getItem('studio:widths') ?? 'null');
+      if (typeof w?.left === 'number' && typeof w?.right === 'number') return w;
+    } catch {
+      // Fall through to the defaults.
+    }
+    return { left: 256, right: 280 };
+  });
+  const saveWidths = () =>
+    setWidths((w) => {
+      localStorage.setItem('studio:widths', JSON.stringify(w));
+      return w;
+    });
+  const size = sizeOf(doc);
   const comp = useRef<Compositor | null>(null);
   const types = useMemo(() => layerTypesFor(doc.slug), [doc.slug]);
 
@@ -161,7 +232,11 @@ export default function Studio({ work }: { work?: string }) {
     h.replaying = true;
     h.at = 0;
     setDoc(next);
-    const kept = sel.filter((id) => next.layers.some((l) => l.id === id));
+    const kept = sel.filter((id) =>
+      isFolderKey(id)
+        ? next.groups?.some((g) => folderKey(g.id) === id)
+        : next.layers.some((l) => l.id === id),
+    );
     setSel(kept.length ? kept : next.layers.slice(-1).map((l) => l.id));
   };
 
@@ -172,8 +247,19 @@ export default function Studio({ work }: { work?: string }) {
   };
   const ungroup = () => setDoc((d) => ungroupLayers(d, sel));
 
-  const picked = doc.layers.filter((l) => sel.includes(l.id));
-  const layer = picked.length === 1 ? picked[0] : null;
+  // The selection's layers: a selected folder stands for every layer in it.
+  const ids = layersOf(doc, sel);
+  const picked = doc.layers.filter((l) => ids.includes(l.id));
+  const folder =
+    sel.length === 1 && isFolderKey(sel[0])
+      ? (doc.groups?.find((g) => folderKey(g.id) === sel[0]) ?? null)
+      : null;
+  const layer = !folder && picked.length === 1 ? picked[0] : null;
+  const patchFolder = (id: string, patch: Partial<GroupDoc>) =>
+    setDoc((d) => ({
+      ...d,
+      groups: d.groups?.map((g) => (g.id === id ? { ...g, ...patch } : g)),
+    }));
   const patchLayer = (id: string, patch: Partial<LayerDoc>) =>
     setDoc((d) => ({
       ...d,
@@ -190,10 +276,10 @@ export default function Studio({ work }: { work?: string }) {
       ),
     }));
   // The selection's box. Setting it carries every selected frame along.
-  const box = boundsOf(picked.map((l) => l.frame));
+  const box = boundsOf(picked.filter((l) => !l.locked).map((l) => l.frame));
   const setBox = (to: Frame) => {
     if (!box) return;
-    patchMany(sel, (l) => ({ frame: remap(l.frame, box, to) }));
+    patchMany(ids, (l) => ({ frame: remap(l.frame, box, to) }));
   };
 
   const addLayer = (
@@ -206,7 +292,7 @@ export default function Studio({ work }: { work?: string }) {
       id: layerId(),
       name: shape?.name ?? t.label,
       visible: true,
-      frame: shape?.frame ?? fullFrame(),
+      frame: shape?.frame ?? fullFrame(size),
       opacity: 1,
       blend: 'normal',
       mask: { source: null, mode: 'alpha', invert: false },
@@ -226,18 +312,28 @@ export default function Studio({ work }: { work?: string }) {
 
   // Move a block of layers so it lands before document index `index` (bottom
   // to top, counted before the block is taken out), joining folder `group`.
-  const moveTo = (ids: string[], index: number, group?: string) =>
+  // A whole folder (`folder`) keeps its layers' places in it and moves into
+  // `group` itself.
+  const moveTo = (
+    ids: string[],
+    index: number,
+    group?: string,
+    folder?: string,
+  ) =>
     setDoc((d) => {
       const set = new Set(ids);
       const block = d.layers
         .filter((l) => set.has(l.id))
-        .map((l) => ({ ...l, group }));
+        .map((l) => (folder ? l : { ...l, group }));
+      const groups = folder
+        ? d.groups?.map((g) => (g.id === folder ? { ...g, parent: group } : g))
+        : d.groups;
       const below = d.layers
         .slice(0, index)
         .filter((l) => !set.has(l.id)).length;
       const layers = d.layers.filter((l) => !set.has(l.id));
       layers.splice(below, 0, ...block);
-      return tidyGroups({ ...d, layers });
+      return tidyGroups({ ...d, layers, groups });
     });
 
   const removeMany = (ids: string[]) => {
@@ -261,39 +357,44 @@ export default function Studio({ work }: { work?: string }) {
   // another folder hops the whole of it, so folders stay in one piece.
   const restack = (dir: 1 | -1, far: boolean) => {
     const ls = doc.layers;
-    const ix = sel
+    const ix = ids
       .map((id) => ls.findIndex((l) => l.id === id))
       .filter((i) => i >= 0);
     if (!ix.length) return;
-    const gs = new Set(sel.map((id) => ls.find((l) => l.id === id)?.group));
+    // The folder the move happens inside: a selected folder's parent, or the
+    // folder the selected layers share.
+    const gs = new Set(
+      folder
+        ? [folder.parent]
+        : ids.map((id) => ls.find((l) => l.id === id)?.group),
+    );
     const g = gs.size === 1 ? [...gs][0] : undefined;
+    const indices = (gid: string) =>
+      ls.flatMap((l, i) =>
+        chainOf(doc, l).some((c) => c.id === gid) ? i : [],
+      );
+    // A neighbour moves past as one piece: itself, or the whole folder it's in
+    // just under `g`.
+    const unit = (i: number) => {
+      const chain = chainOf(doc, ls[i]);
+      const at = g ? chain.findIndex((c) => c.id === g) + 1 : 0;
+      return chain[at] ? indices(chain[at].id) : [i];
+    };
     const lo = Math.min(...ix);
     const hi = Math.max(...ix);
-    const span = g
-      ? ls.flatMap((l, i) => (l.group === g ? i : []))
-      : [0, ls.length - 1];
+    const span = g ? indices(g) : [0, ls.length - 1];
     const min = Math.min(...span);
     const max = Math.max(...span);
     let index: number;
     if (far) index = dir > 0 ? max + 1 : min;
     else if (dir > 0) {
       if (hi >= max) return;
-      const next = ls[hi + 1];
-      index =
-        next.group && next.group !== g
-          ? Math.max(
-              ...ls.flatMap((l, i) => (l.group === next.group ? i : [])),
-            ) + 1
-          : hi + 2;
+      index = Math.max(...unit(hi + 1)) + 1;
     } else {
       if (lo <= min) return;
-      const prev = ls[lo - 1];
-      index =
-        prev.group && prev.group !== g
-          ? Math.min(...ls.flatMap((l, i) => (l.group === prev.group ? i : [])))
-          : lo - 1;
+      index = Math.min(...unit(lo - 1));
     }
-    moveTo(sel, index, g);
+    moveTo(ids, index, g, folder?.id);
   };
 
   // Copies of `src` with fresh ids, placed above the topmost selected layer
@@ -303,7 +404,7 @@ export default function Studio({ work }: { work?: string }) {
     if (!src.length) return;
     const copies = src.map((l) => ({ ...structuredClone(l), id: layerId() }));
     setDoc((d) => {
-      const ix = sel.map((id) => d.layers.findIndex((l) => l.id === id));
+      const ix = ids.map((id) => d.layers.findIndex((l) => l.id === id));
       const top = ix.length ? Math.max(...ix) : d.layers.length - 1;
       const group = d.layers[top]?.group;
       const layers = [...d.layers];
@@ -313,10 +414,41 @@ export default function Studio({ work }: { work?: string }) {
     setSel(copies.map((c) => c.id));
   };
 
+  // A copy of one layer just above it, selected; its id, so a drag can carry it.
+  const duplicateOne = (id: string) => {
+    const src = doc.layers.find((l) => l.id === id);
+    if (!src) return id;
+    const copy = { ...structuredClone(src), id: layerId() };
+    setDoc((d) => {
+      const layers = [...d.layers];
+      layers.splice(layers.findIndex((l) => l.id === id) + 1, 0, copy);
+      return { ...d, layers };
+    });
+    setSel([copy.id]);
+    return copy.id;
+  };
+
   const nudge = (dx: number, dy: number) =>
-    patchMany(sel, (l) => ({
-      frame: { ...l.frame, x: l.frame.x + dx, y: l.frame.y + dy },
-    }));
+    patchMany(ids, (l) =>
+      l.locked
+        ? {}
+        : { frame: { ...l.frame, x: l.frame.x + dx, y: l.frame.y + dy } },
+    );
+
+  // The saved thumbnail: the whole artwork, rendered offscreen so it doesn't
+  // depend on where the canvas is panned or zoomed.
+  const thumbOf = async (d: Artwork) => {
+    const blob = await renderArtwork(d, types, {
+      id: 'thumb',
+      scale: 1,
+      format: 'jpg',
+    });
+    return await new Promise<string>((ok) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result));
+      r.readAsDataURL(blob);
+    });
+  };
 
   const [exporting, setExporting] = useState(false);
   const exportAll = async () => {
@@ -385,17 +517,24 @@ export default function Studio({ work }: { work?: string }) {
                   ...(fit(st, strokeSchema) as Partial<StrokeDoc>),
                   fills: st.fills.map(fullFill),
                 })),
+                outline: outlineOf(l).map((o) => {
+                  const schema = OUTLINES[o.type]?.schema;
+                  return schema
+                    ? {
+                        ...o,
+                        values: {
+                          ...defaultsOf(schema),
+                          ...fit(o.values, schema),
+                        },
+                      }
+                    : o;
+                }),
                 shadows: shadowsOf(l).map((sh) => ({
                   ...sh,
                   ...defaultsOf(shadowSchema),
                   ...fit(sh, shadowSchema),
                 })),
               };
-              if (l.edge)
-                out.edge = {
-                  ...defaultsOf(edgeSchema),
-                  ...fit(l.edge, edgeSchema),
-                };
               if (l.combine) {
                 const s = combineSchema(l, doc.layers);
                 out.combine = { ...defaultsOf(s), ...fit(l.combine, s) };
@@ -403,7 +542,7 @@ export default function Studio({ work }: { work?: string }) {
               return out;
             }),
           },
-          thumb: comp.current?.snapshot(800),
+          thumb: await thumbOf(doc),
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -436,8 +575,27 @@ export default function Studio({ work }: { work?: string }) {
   };
 
   // Shortcuts, the basic Figma and Paper ones.
+  const stepLatest = useRef(step);
+  useEffect(() => {
+    stepLatest.current = step;
+  });
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      // ⌘Z in a value box (number, hex) undoes the document, as everywhere
+      // else: the box commits and lets go first, then the step happens once
+      // that edit has landed in the history.
+      const t = e.target as HTMLElement | null;
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === 'z' &&
+        t?.closest?.('[data-value-field]')
+      ) {
+        e.preventDefault();
+        t.blur();
+        const back = !e.shiftKey;
+        setTimeout(() => stepLatest.current(back), 30);
+        return;
+      }
       if (typing(e) || e.defaultPrevented) return;
       const cmd = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
@@ -455,9 +613,13 @@ export default function Studio({ work }: { work?: string }) {
         if (k === 'c' && picked.length)
           return run(() => (clip.current = picked));
         if (k === 'v') return run(() => paste(clip.current));
+        if (k === 'l' && e.shiftKey && picked.length) {
+          const lock = picked.some((l) => !l.locked);
+          return run(() => patchMany(ids, () => ({ locked: lock })));
+        }
         if (k === 'h' && e.shiftKey && picked.length) {
           const show = picked.some((l) => !l.visible);
-          return run(() => patchMany(sel, () => ({ visible: show })));
+          return run(() => patchMany(ids, () => ({ visible: show })));
         }
         if (e.code === 'BracketRight') return run(() => restack(1, false));
         if (e.code === 'BracketLeft') return run(() => restack(-1, false));
@@ -476,10 +638,15 @@ export default function Studio({ work }: { work?: string }) {
         }[e.key] ?? [0, 0];
         return run(() => nudge(dx, dy));
       }
+      // Enter on a selected shape edits its points, as in Figma; Esc leaves.
+      if (e.key === 'Enter' && tool === 'select' && layer && !layer.locked)
+        return run(() => setTool('edit'));
       if ((e.key === 'Backspace' || e.key === 'Delete') && tool !== 'edit')
-        return run(() => removeMany(sel));
-      const hit = TOOLS.flat().find((x) => x.key === k);
-      if (hit && !e.shiftKey) setTool(hit.tool);
+        return run(() => removeMany(ids));
+      const hit = TOOLS.flat().find(
+        (x) => x.key === (e.shiftKey ? `⇧${k}` : k),
+      );
+      if (hit) setTool(hit.tool);
       if (e.key === 'Escape') {
         if (tool === 'select') setSelected(null);
         else setTool('select');
@@ -490,7 +657,28 @@ export default function Studio({ work }: { work?: string }) {
   });
 
   return (
-    <div className="studio fixed inset-0 grid grid-cols-[16rem_2.75rem_minmax(0,1fr)_17.5rem] bg-neutral-50 text-[11px] text-neutral-800 select-none">
+    <div
+      className="studio fixed inset-0 grid bg-neutral-50 text-[11px] text-neutral-800 select-none"
+      style={{
+        gridTemplateColumns: `${widths.left}px 2.75rem minmax(0,1fr) ${widths.right}px`,
+      }}
+    >
+      <ResizeHandle
+        side="left"
+        edge={widths.left}
+        min={200}
+        max={480}
+        onResize={(left) => setWidths((w) => ({ ...w, left }))}
+        onDone={saveWidths}
+      />
+      <ResizeHandle
+        side="right"
+        edge={widths.right}
+        min={240}
+        max={560}
+        onResize={(right) => setWidths((w) => ({ ...w, right }))}
+        onDone={saveWidths}
+      />
       <aside className="flex min-h-0 flex-col border-r border-black/8">
         <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-black/6 pr-1.5 pl-1.5">
           <Link
@@ -500,43 +688,28 @@ export default function Studio({ work }: { work?: string }) {
           >
             <ArrowLeft size={13} />
           </Link>
-          <span className="relative flex min-w-0 flex-1 items-center rounded-md hover:bg-black/5">
-            <select
-              value={work ?? ''}
-              onChange={(e) => open(e.target.value)}
-              title="Open a work"
-              className="h-6 w-full min-w-0 cursor-pointer appearance-none truncate bg-transparent pr-5 pl-1.5 text-[12px] font-semibold text-neutral-900 outline-none"
-            >
-              <option value="">Unsaved draft</option>
-              {WORKS.map((w) => (
-                <option key={w.slug} value={w.slug}>
-                  {w.doc.title || w.slug}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              size={12}
-              className="pointer-events-none absolute right-1.5 text-neutral-400"
-            />
-          </span>
-          <IconButton title="Save" onClick={save}>
-            <Save size={13} />
-          </IconButton>
-          <IconButton title="New artwork" onClick={startNew}>
-            <FilePlus size={13} />
-          </IconButton>
-          {work && (
-            <IconButton title="Revert to saved" onClick={revert}>
-              <RotateCcw size={13} />
-            </IconButton>
-          )}
-          <Link
-            to="/works"
-            title="All works"
-            className="grid size-6 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-black/5 hover:text-neutral-900"
-          >
-            <LayoutGrid size={13} />
-          </Link>
+          <ArtworkTitle
+            title={doc.title}
+            slug={doc.slug}
+            featured={doc.featured}
+            current={work ?? ''}
+            works={WORKS.map((w) => ({ slug: w.slug, title: w.doc.title }))}
+            onRename={(title) =>
+              setDoc((d) => ({
+                ...d,
+                title,
+                // An unsaved artwork's slug follows its name; a saved one
+                // keeps its folder.
+                ...(!work && { slug: slugify(title) || d.slug }),
+              }))
+            }
+            onSlug={(slug) => setDoc((d) => ({ ...d, slug }))}
+            onFeatured={(featured) => setDoc((d) => ({ ...d, featured }))}
+            onOpen={open}
+            onNew={startNew}
+            onSave={() => void save()}
+            onRevert={work ? revert : undefined}
+          />
         </header>
         {status && (
           <p className="shrink-0 border-b border-black/6 px-3 py-2 text-neutral-500">
@@ -558,25 +731,23 @@ export default function Studio({ work }: { work?: string }) {
               groups: d.groups?.map((g) => (g.id === id ? { ...g, name } : g)),
             }))
           }
+          onPatchGroup={patchFolder}
           onMoveTo={moveTo}
-          onAdd={(t) => addLayer(t)}
+          onHover={setHovered}
         />
       </aside>
 
-      <Toolbar
-        tool={tool}
-        onTool={setTool}
-        onUndo={() => step(true)}
-        onRedo={() => step(false)}
-      />
+      <Toolbar tool={tool} onTool={setTool} />
 
-      <main className="relative min-h-0 bg-neutral-400">
-        <p className="absolute inset-x-0 bottom-0 flex h-8 items-center justify-center text-neutral-700/80">
-          {TOOL_HINTS[tool]}
-        </p>
+      <main
+        className="relative min-h-0"
+        style={{ background: doc.surround ?? '#eeeeee' }}
+      >
         <ArtworkPlayer
           doc={doc}
-          className="absolute! inset-x-8 top-8 bottom-9"
+          navigable
+          surround={doc.surround ?? '#eeeeee'}
+          className="absolute! inset-0"
           onCompositor={(c) => (comp.current = c)}
           onBackdrop={() => setSelected(null)}
         >
@@ -588,7 +759,17 @@ export default function Studio({ work }: { work?: string }) {
             onSelect={(id, add) =>
               add ? id && pick([id], true) : setSelected(id)
             }
+            selection={sel}
+            hovered={hovered}
+            onSelectMany={(ids, add) =>
+              add
+                ? setSel((s) => [...s.filter((x) => !ids.includes(x)), ...ids])
+                : setSel(ids)
+            }
             onPatch={patchLayer}
+            onDuplicate={duplicateOne}
+            onDone={() => setTool('select')}
+            size={size}
             onCreate={(t, frame, shape) => {
               addLayer('solid', {
                 frame,
@@ -604,6 +785,9 @@ export default function Studio({ work }: { work?: string }) {
               onChange={(frame) =>
                 layer ? patchLayer(layer.id, { frame }) : setBox(frame)
               }
+              size={size}
+              rotatable={!!layer && !layer.locked}
+              onDuplicate={() => paste(picked)}
               onShiftClick={(p) => {
                 const hit = hitLayer(doc.layers, p);
                 if (hit) pick([hit.id], true);
@@ -611,6 +795,9 @@ export default function Studio({ work }: { work?: string }) {
             />
           )}
         </ArtworkPlayer>
+        <p className="pointer-events-none absolute inset-x-0 bottom-0 flex h-8 items-center justify-center text-neutral-700/80">
+          {TOOL_HINTS[tool]}
+        </p>
       </main>
 
       <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-black/8">
@@ -622,7 +809,16 @@ export default function Studio({ work }: { work?: string }) {
             onChange={(k, v) => setBrush((b) => ({ ...b, [k]: v }))}
           />
         )}
-        {layer ? (
+        {folder ? (
+          <FolderInspector
+            key={folder.id}
+            folder={folder}
+            layers={doc.layers}
+            box={box}
+            onBox={setBox}
+            onPatch={(p) => patchFolder(folder.id, p)}
+          />
+        ) : layer ? (
           <Inspector
             key={layer.id}
             layer={layer}
@@ -635,56 +831,94 @@ export default function Studio({ work }: { work?: string }) {
             layers={picked}
             box={box}
             onBox={setBox}
-            onPatch={(p) => patchMany(sel, () => p)}
-            onGroup={group}
-            onRemove={() => removeMany(sel)}
+            onPatch={(p) => patchMany(ids, () => p)}
+            onAlign={(how) =>
+              setDoc((d) => ({
+                ...d,
+                layers: alignLayers(d.layers, ids, how),
+              }))
+            }
+            onMask={() => {
+              // Like Figma: the bottom layer's pixels mask the ones above it,
+              // and it stops showing itself.
+              const [bottom, ...rest] = picked;
+              if (!bottom || !rest.length) return;
+              patchMany(
+                rest.map((l) => l.id),
+                () => ({
+                  mask: { source: bottom.id, mode: 'alpha', invert: false },
+                }),
+              );
+              patchLayer(bottom.id, { visible: false });
+            }}
+            onBoolean={(op) => {
+              // The bottom layer's shape is combined with the others' (up to
+              // three), which then only serve as cutters.
+              const [bottom, ...rest] = picked;
+              if (!bottom || !rest.length) return;
+              const used = rest.slice(0, 3);
+              const combine: Record<string, unknown> = { smooth: 0 };
+              used.forEach((l, i) => {
+                combine[`op${i + 1}`] = op;
+                combine[`with${i + 1}`] = l.id;
+              });
+              patchLayer(bottom.id, { combine });
+              patchMany(
+                used.map((l) => l.id),
+                () => ({ visible: false }),
+              );
+              setSelected(bottom.id);
+            }}
           />
         ) : (
           <>
-            <Section id="studio:artwork" title="Artwork">
-              <Labeled label="title">
-                <TextField
-                  value={doc.title}
-                  onChange={(title) => setDoc((d) => ({ ...d, title }))}
-                />
-              </Labeled>
-              <Labeled label="slug">
-                <TextField
-                  value={doc.slug}
-                  onChange={(slug) => setDoc((d) => ({ ...d, slug }))}
-                />
-              </Labeled>
-              <div className="grid gap-1 pt-0.5">
-                <span className="text-neutral-500">About</span>
-                <TextArea
-                  value={doc.about}
-                  onChange={(about) => setDoc((d) => ({ ...d, about }))}
-                />
-              </div>
-              <Labeled label="featured">
-                <input
-                  type="checkbox"
-                  checked={doc.featured}
-                  onChange={(e) =>
-                    setDoc((d) => ({ ...d, featured: e.target.checked }))
+            <PanelHeader
+              title="Page"
+              meta={`${ASPECTS.find((a) => a.size.w === size.w && a.size.h === size.h)?.label ?? 'Custom'} · ${size.w} × ${size.h} · ${doc.layers.length} layers`}
+            />
+            <Section id="studio:canvas" title="Canvas">
+              <Labeled label="aspect">
+                <SelectField
+                  value={
+                    ASPECTS.find(
+                      (a) => a.size.w === size.w && a.size.h === size.h,
+                    )?.label ?? 'custom'
                   }
-                  className="justify-self-start accent-neutral-800"
+                  options={[
+                    ...ASPECTS.map((a) => ({ value: a.label, label: a.label })),
+                    { value: 'custom', label: 'custom' },
+                  ]}
+                  onChange={(v) => {
+                    const a = ASPECTS.find((x) => x.label === v);
+                    if (a) setDoc((d) => resizeArtwork(d, a.size));
+                  }}
                 />
               </Labeled>
+              <div className="grid grid-cols-2 gap-1.5">
+                {(['w', 'h'] as const).map((k) => (
+                  <NumberField
+                    key={k}
+                    value={size[k]}
+                    onChange={(v) =>
+                      setDoc((d) => resizeArtwork(d, { ...size, [k]: v }))
+                    }
+                    min={50}
+                    max={4000}
+                    step={1}
+                    prefix={k.toUpperCase()}
+                  />
+                ))}
+              </div>
             </Section>
             <ControlGroups
               id="studio"
-              closed={['Post']}
-              titles={{ Artwork: 'Background', Post: 'Post processing' }}
+              titles={{ Artwork: 'Colours' }}
               schema={artworkSchema}
-              values={{ background: doc.background, ...doc.post }}
-              onChange={(k, v) =>
-                setDoc((d) =>
-                  k === 'background'
-                    ? { ...d, background: v as string }
-                    : { ...d, post: { ...d.post, [k]: v } },
-                )
-              }
+              values={{
+                background: doc.background,
+                surround: doc.surround ?? '#eeeeee',
+              }}
+              onChange={(k, v) => setDoc((d) => ({ ...d, [k]: v as string }))}
             />
             <ExportSection
               exports={doc.exports ?? DEFAULT_EXPORTS}

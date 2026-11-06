@@ -7,11 +7,19 @@ import {
   Folder,
   FolderOpen,
   GripVertical,
-  Plus,
+  Lock,
+  LockOpen,
   Scissors,
 } from 'lucide-react';
 import { useState } from 'react';
-import { primaryFill, type GroupDoc, type LayerDoc } from './document';
+import {
+  chainOf,
+  layersIn,
+  primaryFill,
+  type Artwork,
+  type GroupDoc,
+  type LayerDoc,
+} from './document';
 import type { LayerType } from './layer';
 import { kindIcon } from './tools';
 import { IconButton } from './ui';
@@ -34,7 +42,13 @@ function usesOf(l: LayerDoc, layers: LayerDoc[]) {
 
 type Row =
   | { kind: 'layer'; key: string; l: LayerDoc; depth: number }
-  | { kind: 'group'; key: string; g: GroupDoc; members: LayerDoc[] };
+  | {
+      kind: 'group';
+      key: string;
+      g: GroupDoc;
+      members: LayerDoc[];
+      depth: number;
+    };
 
 // Where a drop lands: before document index `index`, in folder `group`.
 type Target = { key: string; below: boolean; index: number; group?: string };
@@ -100,8 +114,9 @@ export default function LayerList({
   onPatch,
   onPatchMany,
   onRenameGroup,
+  onPatchGroup,
   onMoveTo,
-  onAdd,
+  onHover,
 }: {
   layers: LayerDoc[];
   groups: GroupDoc[];
@@ -114,9 +129,16 @@ export default function LayerList({
     patch: (l: LayerDoc) => Partial<LayerDoc>,
   ) => void;
   onRenameGroup: (id: string, name: string) => void;
-  // `index` in document order, bottom to top.
-  onMoveTo: (ids: string[], index: number, group?: string) => void;
-  onAdd: (type: string) => void;
+  onPatchGroup: (id: string, patch: Partial<GroupDoc>) => void;
+  // `index` in document order, bottom to top; `folder` when a whole folder
+  // moves (its layers keep their places in it).
+  onMoveTo: (
+    ids: string[],
+    index: number,
+    group?: string,
+    folder?: string,
+  ) => void;
+  onHover?: (id: string | null) => void;
 }) {
   const [dragging, setDragging] = useState<{
     ids: string[];
@@ -127,54 +149,65 @@ export default function LayerList({
   const [over, setOver] = useState<Target | null>(null);
 
   const indexOf = (id: string) => layers.findIndex((l) => l.id === id);
-  const byId = new Map(groups.map((g) => [g.id, g]));
+  const doc = { groups, layers };
 
-  // Top first. A folder's row comes where its topmost layer is, with all its
-  // layers under it.
+  // Top first. A folder's row comes where its topmost layer is, with
+  // everything under it indented beneath; a shut folder hides its contents.
   const rows: Row[] = [];
   const seen = new Set<string>();
   for (const l of [...layers].reverse()) {
-    const g = l.group ? byId.get(l.group) : undefined;
-    if (!g) {
-      rows.push({ kind: 'layer', key: l.id, l, depth: 0 });
-      continue;
-    }
-    if (seen.has(g.id)) continue;
-    seen.add(g.id);
-    const members = layers.filter((x) => x.group === g.id).reverse();
-    rows.push({ kind: 'group', key: `g:${g.id}`, g, members });
-    if (!shut.has(g.id))
-      for (const m of members)
-        rows.push({ kind: 'layer', key: m.id, l: m, depth: 1 });
+    const chain = chainOf(doc, l);
+    let open = true;
+    chain.forEach((g, depth) => {
+      if (!seen.has(g.id)) {
+        seen.add(g.id);
+        if (open)
+          rows.push({
+            kind: 'group',
+            key: `g:${g.id}`,
+            g,
+            members: layersIn(doc as Artwork, g.id).reverse(),
+            depth,
+          });
+      }
+      open &&= !shut.has(g.id);
+    });
+    if (open) rows.push({ kind: 'layer', key: l.id, l, depth: chain.length });
   }
 
-  // What dropping on the top or bottom half of a row would do.
+  // What dropping on the top or bottom half of a row would do: where in the
+  // stack, and in which folder.
   const targetOf = (r: Row, below: boolean): Target => {
-    const movingFolder = !!dragging?.group;
     if (r.kind === 'group') {
       const ix = r.members.map((m) => indexOf(m.id));
       const top = Math.max(...ix) + 1;
       // Under an open folder's title is the top of the folder.
-      if (below && !shut.has(r.g.id) && !movingFolder)
+      if (below && !shut.has(r.g.id))
         return { key: r.key, below, index: top, group: r.g.id };
-      return { key: r.key, below, index: below ? Math.min(...ix) : top };
+      return {
+        key: r.key,
+        below,
+        index: below ? Math.min(...ix) : top,
+        group: r.g.parent,
+      };
     }
     const i = indexOf(r.l.id);
-    // A folder can't go inside another: it lands beside that one instead.
-    if (movingFolder && r.depth === 1 && r.l.group !== dragging?.group) {
-      const head = rows.find((x) => x.kind === 'group' && x.g.id === r.l.group);
-      if (head) return { ...targetOf(head, false), key: r.key, below };
-    }
-    return {
-      key: r.key,
-      below,
-      index: below ? i : i + 1,
-      group: movingFolder ? dragging?.group : r.l.group,
-    };
+    return { key: r.key, below, index: below ? i : i + 1, group: r.l.group };
   };
 
   const drop = () => {
-    if (dragging && over) onMoveTo(dragging.ids, over.index, over.group);
+    if (dragging && over) {
+      // A folder can't go inside itself.
+      const inside =
+        dragging.group &&
+        over.group &&
+        (over.group === dragging.group ||
+          chainOf(doc, { group: over.group } as LayerDoc).some(
+            (g) => g.id === dragging.group,
+          ));
+      if (!inside)
+        onMoveTo(dragging.ids, over.index, over.group, dragging.group);
+    }
     setDragging(null);
     setOver(null);
   };
@@ -209,25 +242,6 @@ export default function LayerList({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center justify-between pr-2 pl-3">
         <span className="font-medium text-neutral-900">Layers</span>
-        <label
-          title="Add a shader layer"
-          className="relative grid size-6 cursor-pointer place-items-center rounded-md text-neutral-500 hover:bg-black/5 hover:text-neutral-900"
-        >
-          <Plus size={14} />
-          <select
-            value=""
-            onChange={(e) => onAdd(e.target.value)}
-            className="absolute inset-0 cursor-pointer opacity-0"
-          >
-            <option value="">Add a layer…</option>
-            {Object.entries(types).map(([id, t]) => (
-              <option key={id} value={id}>
-                {t.label}
-                {id.startsWith('local/') ? ' (this artwork)' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
 
       <ul
@@ -244,15 +258,17 @@ export default function LayerList({
           if (r.kind === 'group') {
             const ids = r.members.map((m) => m.id);
             const open = !shut.has(r.g.id);
-            const on = ids.every((id) => selection.includes(id));
-            const visible = r.members.some((m) => m.visible);
+            const on = selection.includes(r.key);
+            const visible = r.g.visible !== false;
+            const locked = r.members.every((m) => m.locked);
             const Chevron = open ? ChevronDown : ChevronRight;
             const Icon = open ? FolderOpen : Folder;
             return (
               <li
                 key={r.key}
                 {...dragProps(r, ids, r.g.id)}
-                onClick={(e) => onSelect(ids, e.shiftKey)}
+                onClick={(e) => onSelect([r.key], e.shiftKey)}
+                style={{ paddingLeft: r.depth * 14 }}
                 className={`group relative flex h-7 shrink-0 cursor-default items-center gap-1 rounded-md pr-1 ${on ? 'bg-sky-500/12 text-neutral-900' : 'text-neutral-700 hover:bg-black/4'} ${dragging?.group === r.g.id ? 'opacity-40' : ''}`}
               >
                 {line(r, 0)}
@@ -287,10 +303,15 @@ export default function LayerList({
                   className={`font-medium ${visible ? '' : 'text-neutral-400'}`}
                 />
                 <IconButton
+                  title={locked ? 'Unlock folder' : 'Lock folder'}
+                  onClick={() => onPatchMany(ids, () => ({ locked: !locked }))}
+                  className={`size-5! ${locked ? '' : 'opacity-0 group-hover:opacity-100'}`}
+                >
+                  {locked ? <Lock size={12} /> : <LockOpen size={12} />}
+                </IconButton>
+                <IconButton
                   title={visible ? 'Hide folder' : 'Show folder'}
-                  onClick={() =>
-                    onPatchMany(ids, () => ({ visible: !visible }))
-                  }
+                  onClick={() => onPatchGroup(r.g.id, { visible: !visible })}
                   className={`size-5! ${visible ? 'opacity-0 group-hover:opacity-100' : ''}`}
                 >
                   {visible ? <Eye size={12} /> : <EyeOff size={12} />}
@@ -310,6 +331,8 @@ export default function LayerList({
               key={r.key}
               {...dragProps(r, [l.id])}
               onClick={(e) => onSelect([l.id], e.shiftKey)}
+              onPointerEnter={() => onHover?.(l.id)}
+              onPointerLeave={() => onHover?.(null)}
               style={{ paddingLeft: depth * 14 }}
               className={`group relative flex h-7 shrink-0 cursor-default items-center gap-1 rounded-md pr-1 ${on ? 'bg-sky-500/12 text-neutral-900' : 'text-neutral-700 hover:bg-black/4'} ${dragging?.ids.includes(l.id) && !dragging.group ? 'opacity-40' : ''}`}
             >
@@ -344,6 +367,13 @@ export default function LayerList({
                   <Scissors size={11} />
                 </span>
               )}
+              <IconButton
+                title={l.locked ? 'Unlock (⇧⌘L)' : 'Lock (⇧⌘L)'}
+                onClick={() => onPatch(l.id, { locked: !l.locked })}
+                className={`size-5! ${l.locked ? '' : 'opacity-0 group-hover:opacity-100'}`}
+              >
+                {l.locked ? <Lock size={12} /> : <LockOpen size={12} />}
+              </IconButton>
               <IconButton
                 title={l.visible ? 'Hide' : 'Show'}
                 onClick={() => onPatch(l.id, { visible: !l.visible })}

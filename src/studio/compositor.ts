@@ -4,6 +4,7 @@ import {
   BLUR_FRAG,
   DIST_FRAG,
   FILL_FRAG,
+  GROUP_FRAG,
   LAYER_FRAG,
   POST_FRAG,
   SDF_FRAG,
@@ -12,23 +13,31 @@ import {
 } from './compositorShaders';
 import {
   BLEND_MODES,
+  boundsOf,
+  chainOf,
   DESIGN,
+  sizeOf,
   fillsOf,
   filtersOf,
+  layersIn,
+  plainFolder,
+  outlineOf,
   shadowsOf,
   strokesOf,
   type Artwork,
   type FillDoc,
+  type GroupDoc,
   type Frame,
   type LayerDoc,
+  type Size,
+  type StrokeDoc,
 } from './document';
 import type { LayerInstance, LayerType } from './layer';
 import { flatten, verticesOf, type ShapeDoc } from './shape';
-import { combineSchema, edgeSchema, FILTERS } from './studioSchemas';
+import { combineSchema, FILTERS, OUTLINES } from './studioSchemas';
 
-type Edge = typeof EDGE_DEFAULTS;
 type Pair = [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget];
-const EDGE_DEFAULTS = defaultsOf(edgeSchema);
+const MAX_TEARS = 4;
 const OPS = ['none', 'union', 'intersect', 'subtract', 'exclude'];
 const MAX_PTS = 4096;
 const MAX_SHADOWS = 8;
@@ -46,18 +55,63 @@ const OP = {
   texture: 7,
   cut: 8,
   stroke: 9,
+  grain: 10,
+  vignette: 11,
 } as const;
 const ALIGN = ['inside', 'center', 'outside'];
 const blendOf = (b: string) =>
   Math.max(0, BLEND_MODES.indexOf(b as (typeof BLEND_MODES)[number]));
 
+// How much a stroke's width wobbles: only paper fibres do.
+const fibresOf = (s: StrokeDoc) => (s.type === 'fibres' ? s.fibers : 0);
+
 // How far past the frame a layer can draw: the field has to reach as far as
 // the furthest stroke or shadow does.
-export function padOf(l: LayerDoc, e: Edge) {
+// A layer's outline effects in the form the passes use: its visible tears
+// (up to four), their total, its total feather, and the first tear's
+// frequency and seed, which paper-fibre borders follow.
+type Outline = {
+  tears: { amount: number; scale: number; seed: number }[];
+  tear: number;
+  feather: number;
+  tearScale: number;
+  seed: number;
+};
+const outlines = new WeakMap<LayerDoc, Outline>();
+export function outlineSum(l: LayerDoc): Outline {
+  let o = outlines.get(l);
+  if (o) return o;
+  const tears: Outline['tears'] = [];
+  let feather = 0;
+  for (const x of outlineOf(l)) {
+    const def = OUTLINES[x.type];
+    if (!x.visible || !def) continue;
+    const v = { ...defaultsOf(def.schema), ...fit(x.values, def.schema) };
+    if (x.type === 'tear' && tears.length < MAX_TEARS)
+      tears.push({
+        amount: Number(v.amount),
+        scale: Number(v.scale),
+        seed: Number(v.seed),
+      });
+    if (x.type === 'feather') feather += Number(v.amount);
+  }
+  o = {
+    tears,
+    tear: tears.reduce((t, x) => t + x.amount, 0),
+    feather,
+    tearScale: tears[0]?.scale ?? 0.06,
+    seed: tears[0]?.seed ?? 1,
+  };
+  outlines.set(l, o);
+  return o;
+}
+
+export function padOf(l: LayerDoc) {
+  const e = outlineSum(l);
   let reach = 0;
   for (const s of strokesOf(l)) {
     if (!s.visible) continue;
-    const w = s.width * (1 + s.fibers);
+    const w = s.width * (1 + fibresOf(s));
     const out = s.align === 'outside' ? w : s.align === 'center' ? w / 2 : 0;
     reach = Math.max(reach, out + Math.max(0, s.offset));
   }
@@ -115,6 +169,7 @@ export class Compositor {
   private fill = pass(FILL_FRAG, { uColor: { value: new THREE.Vector3() } });
   private distPass = pass(DIST_FRAG, {
     uDesign: { value: new THREE.Vector2(DESIGN.w, DESIGN.h) },
+    uView: { value: new THREE.Vector4(0, 0, DESIGN.w, DESIGN.h) },
     uFrame: { value: new THREE.Vector4() },
     uRot: { value: 0 },
     uShape: { value: null },
@@ -131,9 +186,10 @@ export class Compositor {
     uOpRot: { value: new THREE.Vector3() },
     uOpPad: { value: new THREE.Vector3() },
     uSmooth: { value: 0 },
-    uTear: { value: 0 },
-    uTearScale: { value: 0.06 },
-    uSeed: { value: 1 },
+    uTears: { value: 0 },
+    uTear: {
+      value: Array.from({ length: MAX_TEARS }, () => new THREE.Vector4()),
+    },
   });
   private stackPass = pass(STACK_FRAG, {
     uPrev: { value: null },
@@ -141,6 +197,7 @@ export class Compositor {
     uSrc: { value: null },
     uDist: { value: null },
     uDesign: { value: new THREE.Vector2(DESIGN.w, DESIGN.h) },
+    uView: { value: new THREE.Vector4(0, 0, DESIGN.w, DESIGN.h) },
     uFrame: { value: new THREE.Vector4() },
     uRot: { value: 0 },
     uPad: { value: 0 },
@@ -158,6 +215,9 @@ export class Compositor {
     uAlign: { value: 1 },
     uOffset: { value: 0 },
     uFibers: { value: 0 },
+    uSide: { value: 0 },
+    uGrainPx: { value: 1 },
+    uTime: { value: 0 },
     uTearScale: { value: 0.06 },
     uSeed: { value: 1 },
     uOpacity: { value: 1 },
@@ -175,6 +235,7 @@ export class Compositor {
     uDist: { value: null },
     uMask: { value: null },
     uDesign: { value: new THREE.Vector2(DESIGN.w, DESIGN.h) },
+    uView: { value: new THREE.Vector4(0, 0, DESIGN.w, DESIGN.h) },
     uShadows: { value: 0 },
     uShadowGeo: {
       value: Array.from({ length: MAX_SHADOWS }, () => new THREE.Vector4()),
@@ -189,6 +250,21 @@ export class Compositor {
     uOpacity: { value: 1 },
     uBlend: { value: 0 },
   });
+  private groupPass = pass(GROUP_FRAG, {
+    uBase: { value: null },
+    uSrc: { value: null },
+    uMask: { value: null },
+    uView: { value: new THREE.Vector4(0, 0, DESIGN.w, DESIGN.h) },
+    uMode: { value: 0 },
+    uOffset: { value: new THREE.Vector2() },
+    uColor: { value: new THREE.Vector4() },
+    uMaskMode: { value: 0 },
+    uMaskInvert: { value: false },
+    uMaskFrame: { value: new THREE.Vector4() },
+    uMaskRot: { value: 0 },
+    uOpacity: { value: 1 },
+    uBlend: { value: 0 },
+  });
   private post = pass(POST_FRAG, {
     uSrc: { value: null },
     uRes: { value: new THREE.Vector2() },
@@ -196,6 +272,9 @@ export class Compositor {
     uGrain: { value: 0 },
     uGrainSize: { value: 1 },
     uVignette: { value: 0 },
+    uView: { value: new THREE.Vector4(0, 0, DESIGN.w, DESIGN.h) },
+    uDesign: { value: new THREE.Vector2(DESIGN.w, DESIGN.h) },
+    uSurround: { value: new THREE.Vector3(0.64, 0.64, 0.64) },
   });
   private pts = new THREE.DataTexture(
     new Float32Array(MAX_PTS * 4),
@@ -222,6 +301,9 @@ export class Compositor {
   private dist = target(1, 1, true);
   // Layers used as a mask keep their fills for the whole frame.
   private mattes = new Map<string, Pair>();
+  // A folder that's blended, filtered, masked or shadowed composites its
+  // layers here first, one pair per level of nesting.
+  private folders: Pair[] = [];
 
   private sdfs = new Map<string, Sdf>();
   // Bound to the field samplers a plain-rectangle layer never reads.
@@ -235,6 +317,10 @@ export class Compositor {
   private types: Record<string, LayerType> = {};
   private time = 0;
   private px = { w: 1, h: 1 };
+  // The artwork's size, and the part of it this canvas shows (design units).
+  private size: Size = DESIGN;
+  private view: Frame | null = null;
+  private surround = '#a3a3a3';
 
   readonly canvas: HTMLCanvasElement;
 
@@ -256,11 +342,36 @@ export class Compositor {
 
   // `width`×`height` CSS pixels on screen; the artwork's aspect is the
   // caller's job.
+  // Whether something changed since the last frame, for a player that only
+  // renders on change while its animation is paused.
+  dirty = true;
+
   setSize(width: number, height: number, dpr: number) {
+    this.dirty = true;
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(width, height, false);
     this.px = { w: Math.round(width * dpr), h: Math.round(height * dpr) };
     for (const t of this.allTargets()) t.setSize(this.px.w, this.px.h);
+  }
+
+  // Show only `view` of the artwork (design units), for panning and zooming,
+  // with `surround` painted where the view runs past the artwork. Null shows
+  // the whole artwork, which the canvas is then expected to match in aspect.
+  setView(view: Frame | null, surround = this.surround) {
+    const v = this.view;
+    if (
+      !view !== !v ||
+      (view &&
+        v &&
+        (v.x !== view.x || v.y !== view.y || v.w !== view.w || v.h !== view.h))
+    )
+      this.dirty = true;
+    this.view = view;
+    this.surround = surround;
+  }
+
+  private viewOf(): Frame {
+    return this.view ?? { x: 0, y: 0, ...this.size, rot: 0 };
   }
 
   private allTargets() {
@@ -271,6 +382,7 @@ export class Compositor {
       ...this.blurs,
       this.dist,
       ...[...this.mattes.values()].flat(),
+      ...this.folders.flat(),
     ];
   }
 
@@ -278,8 +390,10 @@ export class Compositor {
   // fill id and only created or disposed when a fill appears, disappears or
   // changes type.
   setDocument(doc: Artwork, types: Record<string, LayerType>) {
+    this.dirty = true;
     this.doc = doc;
     this.types = types;
+    this.size = sizeOf(doc);
     const fills = new Map(
       doc.layers
         .flatMap((l) => [
@@ -309,17 +423,6 @@ export class Compositor {
     }
   }
 
-  private edges = new WeakMap<object, Edge>();
-  edgeOf(l: LayerDoc): Edge {
-    if (!l.edge) return EDGE_DEFAULTS;
-    let e = this.edges.get(l.edge);
-    if (!e) {
-      e = { ...EDGE_DEFAULTS, ...fit(l.edge, edgeSchema) } as Edge;
-      this.edges.set(l.edge, e);
-    }
-    return e;
-  }
-
   // A layer with a shape-style fill (Node path) is drawn from its outline
   // rather than cut to it.
   private isStyled(l: LayerDoc) {
@@ -329,7 +432,7 @@ export class Compositor {
   // A shape style draws stickers and labels past its outline, so it gets
   // room beyond what the edge effects need.
   private padFor(l: LayerDoc) {
-    const pad = padOf(l, this.edgeOf(l));
+    const pad = padOf(l);
     return this.isStyled(l) ? pad + STYLE_PAD : pad;
   }
 
@@ -467,7 +570,7 @@ export class Compositor {
         h: f.h + 2 * pad,
       };
     if (fillsOf(l)[0]?.fillSpace === 'canvas')
-      return { x: 0, y: 0, w: DESIGN.w, h: DESIGN.h, rot: 0 };
+      return { x: 0, y: 0, ...this.size, rot: 0 };
     return f;
   }
 
@@ -518,8 +621,8 @@ export class Compositor {
       if (!t || !inst) continue;
       const canvas = f.fillSpace === 'canvas' && !t.shapeStyle;
       inst.render({
-        w: canvas ? DESIGN.w : t.shapeStyle ? fr.w + 2 * pad : fr.w,
-        h: canvas ? DESIGN.h : t.shapeStyle ? fr.h + 2 * pad : fr.h,
+        w: canvas ? this.size.w : t.shapeStyle ? fr.w + 2 * pad : fr.w,
+        h: canvas ? this.size.h : t.shapeStyle ? fr.h + 2 * pad : fr.h,
         scale,
         dt,
         values: this.valuesOf(f, t.schema),
@@ -541,7 +644,7 @@ export class Compositor {
   // A blur of `src` (`radius` design units) into `this.blurs[1]`.
   private blur(src: THREE.Texture, radius: number, opaque: boolean) {
     const u = this.blurPass.uniforms;
-    const r = radius * (this.px.w / DESIGN.w);
+    const r = radius * (this.px.w / this.viewOf().w);
     u.uRadius.value = r;
     u.uOpaque.value = opaque;
     u.uSrc.value = src;
@@ -583,10 +686,12 @@ export class Compositor {
         u.uGrid.value.set(grid.x, grid.y, grid.w, grid.h);
         u.uGridRot.value = (grid.rot * Math.PI) / 180;
         u.uCells.value.set(n, (n * grid.h) / grid.w);
-        u.uAmount.value = Math.max(
-          1e-3,
-          Number(v.levels ?? v.level ?? v.scale ?? 1),
-        );
+        u.uAmount.value =
+          f.type === 'grain' || f.type === 'vignette'
+            ? Number(v.amount)
+            : Math.max(1e-3, Number(v.levels ?? v.level ?? v.scale ?? 1));
+        u.uGrainPx.value = Number(v.size ?? 1) * (this.px.w / this.viewOf().w);
+        u.uTime.value = this.time;
         u.uInk.value = rgb(String(v.ink ?? '#000000'));
         u.uPaper.value = rgb(String(v.paper ?? '#ffffff'));
       });
@@ -646,10 +751,11 @@ export class Compositor {
       );
     }
     u.uSmooth.value = c ? Number(c.smooth) || 0 : 0;
-    const e = this.edgeOf(l);
-    u.uTear.value = e.tear;
-    u.uTearScale.value = e.tearScale;
-    u.uSeed.value = e.seed;
+    const o = outlineSum(l);
+    u.uTears.value = o.tears.length;
+    o.tears.forEach((t, i) =>
+      u.uTear.value[i].set(t.amount, t.scale, t.seed, 0),
+    );
     this.draw(this.distPass, this.dist);
   }
 
@@ -657,7 +763,7 @@ export class Compositor {
   private prepare(l: LayerDoc, base: THREE.Texture) {
     const s = this.stackPass.uniforms;
     const fr = l.frame;
-    const e = this.edgeOf(l);
+    const e = outlineSum(l);
     s.uFrame.value.set(fr.x, fr.y, fr.w, fr.h);
     s.uRot.value = (fr.rot * Math.PI) / 180;
     s.uPad.value = this.padFor(l);
@@ -668,19 +774,89 @@ export class Compositor {
     s.uFeather.value = e.feather;
   }
 
+  // Only the part of the view the artwork covers (plus a margin for blurs and
+  // offsets) is worth drawing; the rest is surround, which the post pass
+  // paints. Scissoring the view-sized buffers keeps a zoomed-out or panned
+  // view as cheap as the artwork alone.
+  private clipTo(view: Frame) {
+    const sx = this.px.w / view.w;
+    const sy = this.px.h / view.h;
+    const m = 48;
+    const x0 = Math.max(0, Math.floor(-view.x * sx) - m);
+    const x1 = Math.min(this.px.w, Math.ceil((this.size.w - view.x) * sx) + m);
+    const top = Math.max(0, Math.floor(-view.y * sy) - m);
+    const bottom = Math.min(
+      this.px.h,
+      Math.ceil((this.size.h - view.y) * sy) + m,
+    );
+    const clip = x1 - x0 < this.px.w || bottom - top < this.px.h;
+    for (const t of this.allTargets()) {
+      t.scissorTest = clip;
+      // GL counts rows from the bottom.
+      t.scissor.set(
+        x0,
+        this.px.h - bottom,
+        Math.max(0, x1 - x0),
+        Math.max(0, bottom - top),
+      );
+    }
+  }
+
+  // A folder as a layer, for the passes its filters run through: its box is
+  // its layers' box.
+  private folderLayer(doc: Artwork, g: GroupDoc): LayerDoc {
+    const frame = boundsOf(layersIn(doc, g.id).map((x) => x.frame)) ?? {
+      x: 0,
+      y: 0,
+      ...this.size,
+      rot: 0,
+    };
+    return {
+      id: `g:${g.id}`,
+      name: g.name,
+      visible: true,
+      frame,
+      opacity: 1,
+      blend: 'normal',
+      mask: { source: null, mode: 'alpha', invert: false },
+      fills: [],
+      filters: g.filters ?? [],
+      strokes: [],
+      shadows: [],
+      outline: [],
+    };
+  }
+
   render(dt: number) {
     const doc = this.doc;
     if (!doc) return;
     this.time += dt;
-    const scale = this.px.w / DESIGN.w;
-    let [a, b] = this.targets;
+    const view = this.viewOf();
+    // Pixels per design unit; layer textures are drawn at this, so zooming in
+    // sharpens them (each capped by its own maximum size).
+    const scale = this.px.w / view.w;
+    for (const m of [
+      this.distPass,
+      this.stackPass,
+      this.layerPass,
+      this.post,
+    ]) {
+      m.uniforms.uDesign.value.set(this.size.w, this.size.h);
+      m.uniforms.uView.value.set(view.x, view.y, view.w, view.h);
+    }
+    this.groupPass.uniforms.uView.value.set(view.x, view.y, view.w, view.h);
+    this.clipTo(view);
+    const a = this.targets[0];
 
     this.fill.uniforms.uColor.value = rgb(doc.background);
     this.draw(this.fill, a);
 
     // Layers used as masks build their fills first and keep them for the
     // frame, even a hidden one, so a matte can be a layer you never see.
-    const masks = new Set(doc.layers.map((l) => l.mask.source));
+    const masks = new Set([
+      ...doc.layers.map((l) => l.mask.source),
+      ...(doc.groups ?? []).map((g) => g.mask?.source),
+    ]);
     const matte = new Map<string, THREE.Texture>();
     for (const l of doc.layers) {
       if (!masks.has(l.id)) continue;
@@ -695,9 +871,11 @@ export class Compositor {
     }
 
     const u = this.layerPass.uniforms;
-    for (const l of doc.layers) {
-      if (!l.visible) continue;
-      this.prepare(l, a.texture);
+    // One layer onto `into`'s current content (the artwork, or a folder's
+    // layers so far).
+    const drawLayer = (l: LayerDoc, into: Pair) => {
+      const base = into[0];
+      this.prepare(l, base.texture);
       this.distanceOf(l, doc.layers);
 
       // A matte's fills are reused unless a filter reads the artwork behind
@@ -705,9 +883,9 @@ export class Compositor {
       const pair = this.build;
       const behind = filtersOf(l).some((f) => f.input === 'background');
       const kept = !behind && matte.get(l.id);
-      let tex = kept || this.fillsInto(l, pair, a.texture, scale, dt);
+      let tex = kept || this.fillsInto(l, pair, base.texture, scale, dt);
       const strokes = strokesOf(l).filter((x) => x.visible);
-      if (!tex && !strokes.length) continue;
+      if (!tex && !strokes.length) return;
       if (!tex) {
         this.clear(pair[0]);
         tex = pair[0].texture;
@@ -730,7 +908,13 @@ export class Compositor {
             u.uWidth.value = st.width;
             u.uAlign.value = Math.max(0, ALIGN.indexOf(st.align));
             u.uOffset.value = st.offset;
-            u.uFibers.value = st.fibers;
+            u.uFibers.value = fibresOf(st);
+            u.uSide.value = Math.max(
+              0,
+              ['all', 'top', 'bottom', 'left', 'right'].indexOf(
+                st.sides ?? 'all',
+              ),
+            );
             u.uOpacity.value = st.opacity;
             u.uBlend.value = blendOf(st.blend);
           });
@@ -738,7 +922,7 @@ export class Compositor {
         tex = pair[0].texture;
       }
 
-      u.uBase.value = a.texture;
+      u.uBase.value = base.texture;
       u.uLayer.value = tex;
       u.uDist.value = this.dist.texture;
       const shadows = shadowsOf(l)
@@ -763,23 +947,103 @@ export class Compositor {
         u.uMaskFrame.value.set(
           whole ? 0 : src.frame.x,
           whole ? 0 : src.frame.y,
-          whole ? DESIGN.w : src.frame.w,
-          whole ? DESIGN.h : src.frame.h,
+          whole ? this.size.w : src.frame.w,
+          whole ? this.size.h : src.frame.h,
         );
         u.uMaskRot.value = whole ? 0 : (src.frame.rot * Math.PI) / 180;
       }
       u.uMaskInvert.value = l.mask.invert;
-      this.draw(this.layerPass, b);
-      [a, b] = [b, a];
+
+      this.draw(this.layerPass, into[1]);
+      into.reverse();
+    };
+
+    // Folders open and close as the layers under them go by. A plain one draws
+    // straight into its parent; one with effects gets a buffer of its own,
+    // laid onto its parent when it closes.
+    type Open = { g: GroupDoc | null; pair: Pair; own: boolean };
+    const stack: Open[] = [{ g: null, pair: this.targets, own: false }];
+    const openFolder = (g: GroupDoc) => {
+      const top = stack[stack.length - 1];
+      if (plainFolder(g)) {
+        stack.push({ g, pair: top.pair, own: false });
+        return;
+      }
+      const depth = stack.filter((f) => f.own).length;
+      const pair = (this.folders[depth] ??= [
+        target(this.px.w, this.px.h),
+        target(this.px.w, this.px.h),
+      ]);
+      this.clipTo(view);
+      this.clear(pair[0]);
+      stack.push({ g, pair, own: true });
+    };
+    const closeFolder = () => {
+      const f = stack.pop()!;
+      if (!f.own || !f.g) return;
+      const g = f.g;
+      const into = stack[stack.length - 1].pair;
+      const gl = this.folderLayer(doc, g);
+      this.prepare(gl, into[0].texture);
+      this.runFilters(gl, f.pair, into[0].texture);
+      const gu = this.groupPass.uniforms;
+      const src = doc.layers.find((m) => m.id === g.mask?.source);
+      const mtex = src && matte.get(src.id);
+      gu.uMaskMode.value = mtex ? (g.mask?.mode === 'luma' ? 2 : 1) : 0;
+      gu.uMask.value = mtex ?? f.pair[0].texture;
+      gu.uMaskInvert.value = !!g.mask?.invert;
+      if (src) {
+        const whole = fillsOf(src).some((x) => x.fillSpace === 'canvas');
+        gu.uMaskFrame.value.set(
+          whole ? 0 : src.frame.x,
+          whole ? 0 : src.frame.y,
+          whole ? this.size.w : src.frame.w,
+          whole ? this.size.h : src.frame.h,
+        );
+        gu.uMaskRot.value = whole ? 0 : (src.frame.rot * Math.PI) / 180;
+      }
+      gu.uOpacity.value = g.opacity ?? 1;
+      for (const sh of (g.shadows ?? []).filter((x) => x.visible)) {
+        gu.uMode.value = 1;
+        gu.uSrc.value = this.blur(f.pair[0].texture, sh.blur / 2, false);
+        gu.uOffset.value.set(sh.x, sh.y);
+        const c = rgb(sh.color);
+        gu.uColor.value.set(c.x, c.y, c.z, sh.opacity);
+        gu.uBase.value = into[0].texture;
+        gu.uBlend.value = 0;
+        this.draw(this.groupPass, into[1]);
+        into.reverse();
+      }
+      gu.uMode.value = 0;
+      gu.uSrc.value = f.pair[0].texture;
+      gu.uBase.value = into[0].texture;
+      gu.uBlend.value = blendOf(g.blend ?? 'normal');
+      this.draw(this.groupPass, into[1]);
+      into.reverse();
+    };
+
+    for (const l of doc.layers) {
+      const chain = chainOf(doc, l);
+      if (!l.visible || chain.some((g) => g.visible === false)) continue;
+      while (
+        stack.length > 1 &&
+        !chain.some((g) => g.id === stack[stack.length - 1].g?.id)
+      )
+        closeFolder();
+      for (const g of chain)
+        if (!stack.some((f) => f.g?.id === g.id)) openFolder(g);
+      drawLayer(l, stack[stack.length - 1].pair);
     }
+    while (stack.length > 1) closeFolder();
 
     const p = this.post.uniforms;
-    p.uSrc.value = a.texture;
+    p.uSrc.value = this.targets[0].texture;
     p.uRes.value.set(this.px.w, this.px.h);
     p.uTime.value = this.time;
     p.uGrain.value = doc.post.grain;
     p.uGrainSize.value = Math.max(1, doc.post.grainSize * scale);
     p.uVignette.value = doc.post.vignette;
+    p.uSurround.value = rgb(this.surround);
     this.draw(this.post, null);
   }
 
@@ -789,7 +1053,7 @@ export class Compositor {
     this.render(0);
     const c = document.createElement('canvas');
     c.width = width;
-    c.height = Math.round((width * DESIGN.h) / DESIGN.w);
+    c.height = Math.round((width * this.size.h) / this.size.w);
     c.getContext('2d')!.drawImage(this.canvas, 0, 0, c.width, c.height);
     return c.toDataURL('image/jpeg', 0.86);
   }
@@ -808,6 +1072,7 @@ export class Compositor {
       this.stackPass,
       this.blurPass,
       this.layerPass,
+      this.groupPass,
       this.post,
       this.sdfPass,
     ])

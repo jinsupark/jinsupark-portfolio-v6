@@ -3,6 +3,7 @@ import {
   Circle,
   Hexagon,
   MousePointer2,
+  Pencil,
   PenTool,
   RectangleHorizontal,
   Spline,
@@ -32,6 +33,7 @@ export type Tool =
   | 'polygon'
   | 'star'
   | 'pen'
+  | 'bezier'
   | 'edit'
   | 'smear';
 
@@ -60,7 +62,10 @@ export const TOOLS: {
     { tool: 'polygon', key: 'g', label: 'Polygon', icon: Hexagon },
     { tool: 'star', key: 'k', label: 'Star', icon: Star },
   ],
-  [{ tool: 'pen', key: 'p', label: 'Draw', icon: PenTool }],
+  [
+    { tool: 'bezier', key: 'p', label: 'Pen', icon: PenTool },
+    { tool: 'pen', key: '⇧p', label: 'Pencil', icon: Pencil },
+  ],
   [
     { tool: 'edit', key: 'a', label: 'Edit points', icon: Spline },
     { tool: 'smear', key: 's', label: 'Smear', icon: BrushIcon },
@@ -75,6 +80,8 @@ export const TOOL_HINTS: Record<Tool, string> = {
   polygon: 'drag to draw · sides in the inspector',
   star: 'drag to draw · points in the inspector',
   pen: 'draw a closed shape freehand',
+  bezier:
+    'click to place points · drag to curve · click the first point or Enter to close · Backspace removes the last',
   edit: 'drag points and handles · double-click the outline to add · alt-click a point for corner / smooth · delete removes',
   smear: 'drag across the outline to push it',
 };
@@ -101,7 +108,7 @@ export const shapeOf = (l: LayerDoc): ShapeDoc => l.shape ?? newShape('rect');
 export function hitLayer(layers: LayerDoc[], p: P) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const l = layers[i];
-    if (!l.visible) continue;
+    if (!l.visible || l.locked) continue;
     const q = toLocal(l.frame, p);
     const { w, h } = l.frame;
     if (q.x < 0 || q.y < 0 || q.x > w || q.y > h) continue;
@@ -114,14 +121,14 @@ export function hitLayer(layers: LayerDoc[], p: P) {
 // Where a popover opened from `el` goes: beside the panel or popover it was
 // opened from, a few pixels off, level with `el` where the screen allows.
 export const POPOVER_W = 264;
-export function popoverAt(el: Element) {
+export function popoverAt(el: Element, width = POPOVER_W) {
   const r = el.getBoundingClientRect();
   const from = (
     el.closest('[data-popover]') ?? el.closest('aside')
   )?.getBoundingClientRect();
   return {
     top: Math.max(8, Math.min(r.top - 8, innerHeight - 360)),
-    left: Math.max(8, (from?.left ?? r.left) - POPOVER_W - 4),
+    left: Math.max(8, (from?.left ?? r.left) - width - 4),
   };
 }
 

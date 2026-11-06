@@ -14,13 +14,11 @@ import type { ShapeKind } from './shape';
 // Controls that would do nothing at their current settings carry a `when`,
 // so the inspector only shows what's in play.
 
-const on = (key: string) => (v: Record<string, unknown>) => Number(v[key]) > 0;
-
 export const frameSchema = {
-  x: range('Transform', 0, -DESIGN.w, DESIGN.w * 2, 1),
-  y: range('Transform', 0, -DESIGN.h, DESIGN.h * 2, 1),
-  w: range('Transform', DESIGN.w, 1, DESIGN.w * 3, 1, 'width'),
-  h: range('Transform', DESIGN.h, 1, DESIGN.h * 3, 1, 'height'),
+  x: range('Transform', 0, -4000, 8000, 1),
+  y: range('Transform', 0, -4000, 8000, 1),
+  w: range('Transform', DESIGN.w, 1, 12000, 1, 'width'),
+  h: range('Transform', DESIGN.h, 1, 12000, 1, 'height'),
   rot: range('Transform', 0, -180, 180, 0.5, 'rotation °'),
 };
 
@@ -65,22 +63,31 @@ export const shapeSchema = (kind: ShapeKind): Schema => {
   return {};
 };
 
-// Changes to the outline itself, so the fills, strokes and shadows all follow
-// them: a tear moves the edge, a feather softens it.
-export const edgeSchema = {
-  tear: range('Edge', 0, 0, 40, 0.1, 'torn edge'),
-  tearScale: when(
-    range('Edge', 0.06, 0.005, 0.5, 0.001, 'tear frequency'),
-    on('tear'),
-  ),
-  seed: range('Edge', 1, 1, 999, 1, 'tear seed'),
-  feather: range('Edge', 0, 0, 120, 0.5),
+// Outline effects, by type. `main` is the value shown in the effect's row.
+export const OUTLINES: Record<
+  string,
+  { label: string; main: string; schema: Schema }
+> = {
+  tear: {
+    label: 'Torn edge',
+    main: 'amount',
+    schema: {
+      amount: range('Torn edge', 10, 0, 40, 0.1),
+      scale: range('Torn edge', 0.06, 0.005, 0.5, 0.001, 'frequency'),
+      seed: range('Torn edge', 1, 1, 999, 1),
+    },
+  },
+  feather: {
+    label: 'Feather',
+    main: 'amount',
+    schema: { amount: range('Feather', 8, 0, 120, 0.5) },
+  },
 };
 
 export const strokeSchema = {
-  width: range('Stroke', 2, 0.1, 80, 0.1),
+  width: range('Border', 2, 0.1, 80, 0.1),
   align: select(
-    'Stroke',
+    'Border',
     'center',
     [
       { value: 'inside', label: 'inside' },
@@ -89,8 +96,23 @@ export const strokeSchema = {
     ],
     'position',
   ),
-  offset: range('Stroke', 0, -80, 80, 0.5),
-  fibers: range('Stroke', 0, 0, 2, 0.01, 'paper fibres'),
+  offset: range('Border', 0, -80, 80, 0.5),
+  sides: select('Border', 'all', [
+    { value: 'all', label: 'all' },
+    { value: 'top', label: 'top' },
+    { value: 'bottom', label: 'bottom' },
+    { value: 'left', label: 'left' },
+    { value: 'right', label: 'right' },
+  ]),
+};
+
+// Border (stroke) types, by key, with the settings each adds to the common ones.
+export const STROKES: Record<string, { label: string; schema: Schema }> = {
+  line: { label: 'Line', schema: {} },
+  fibres: {
+    label: 'Paper fibres',
+    schema: { fibers: range('Border', 0.6, 0.01, 2, 0.01, 'fibres') },
+  },
 };
 
 export const shadowSchema = {
@@ -147,6 +169,19 @@ export const FILTERS: Record<
     main: 'cells',
     schema: { cells: range('Pixelate', 40, 1, 240, 1, 'cells across') },
   },
+  grain: {
+    label: 'Grain',
+    main: 'amount',
+    schema: {
+      amount: range('Grain', 0.06, 0, 0.4, 0.005),
+      size: range('Grain', 1, 1, 6, 0.5, 'grain size'),
+    },
+  },
+  vignette: {
+    label: 'Vignette',
+    main: 'amount',
+    schema: { amount: range('Vignette', 0.3, 0, 1, 0.01) },
+  },
   mono: { label: 'Mono', schema: {} },
   invert: { label: 'Invert', schema: {} },
   posterize: {
@@ -196,8 +231,6 @@ export const brushSchema = {
 };
 
 export const artworkSchema = {
-  background: color('Artwork', '#e3e1dc', 'fill'),
-  grain: range('Post', 0.04, 0, 0.4, 0.005),
-  grainSize: range('Post', 1, 1, 6, 0.5, 'grain size'),
-  vignette: range('Post', 0, 0, 1, 0.01),
+  surround: color('Artwork', '#eeeeee', 'background'),
+  background: color('Artwork', '#e3e1dc', 'canvas'),
 };

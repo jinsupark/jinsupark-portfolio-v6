@@ -85,15 +85,30 @@ float fbm(vec2 p) {
   return s;
 }
 
+// \`s\` (straight alpha \`a\`) laid over \`b\`, blended by \`mode\` only where
+// there's something below. Over an opaque base this is the plain blend.
+vec4 over(vec4 b, vec3 s, float a, int mode) {
+  vec3 sc = mix(s, clamp(blend(b.rgb, s, mode), 0.0, 1.0), b.a);
+  float oa = a + b.a * (1.0 - a);
+  vec3 oc = oa > 0.0 ? (sc * a + b.rgb * b.a * (1.0 - a)) / oa : vec3(0.0);
+  return vec4(oc, oa);
+}
+
 // Back from a frame's 0..1 space to artwork position.
 vec2 fromLocal(vec2 l, vec4 f, float r) {
   vec2 d = l * f.zw - f.zw * 0.5;
   float s = sin(r), c = cos(r);
   return vec2(d.x * c - d.y * s, d.x * s + d.y * c) + f.xy + f.zw * 0.5;
 }
-// An artwork-sized render target read at artwork position p.
-vec4 atArt(sampler2D t, vec2 p, vec2 design) {
-  return texture(t, vec2(p.x / design.x, 1.0 - p.y / design.y));
+// The artwork position under a pass's pixel: passes render the visible part
+// of the artwork, \`view\` (x, y, w, h in design units).
+vec2 artAt(vec2 uv, vec4 view) {
+  return view.xy + vec2(uv.x, 1.0 - uv.y) * view.zw;
+}
+// A view-sized render target read at artwork position p.
+vec4 atArt(sampler2D t, vec2 p, vec4 view) {
+  vec2 q = (p - view.xy) / view.zw;
+  return texture(t, vec2(q.x, 1.0 - q.y));
 }
 `;
 
@@ -138,6 +153,7 @@ void main() {
 export const DIST_FRAG = /* glsl */ `
 precision highp float;
 uniform vec2 uDesign;
+uniform vec4 uView;
 uniform vec4 uFrame;
 uniform float uRot;
 uniform sampler2D uShape;
@@ -154,9 +170,9 @@ uniform vec4 uOpFrame2;
 uniform vec3 uOpRot;
 uniform vec3 uOpPad;
 uniform float uSmooth;
-uniform float uTear;
-uniform float uTearScale;
-uniform float uSeed;
+// Tears, each amount, frequency, seed; they add up.
+uniform int uTears;
+uniform vec4 uTear[4];
 in vec2 vUv;
 out vec4 outColor;
 ${COMMON}
@@ -191,16 +207,17 @@ float combine(float d, float e, int kind) {
 }
 
 void main() {
-  vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uDesign;
+  vec2 p = artAt(vUv, uView);
   float d = sdfOf(uShape, uShapeMode, p, uFrame, uRot, uPad);
   if (uOpKind.x > 0) d = combine(d, sdfOf(uOp0, uOpMode.x, p, uOpFrame0, uOpRot.x, uOpPad.x), uOpKind.x);
   if (uOpKind.y > 0) d = combine(d, sdfOf(uOp1, uOpMode.y, p, uOpFrame1, uOpRot.y, uOpPad.y), uOpKind.y);
   if (uOpKind.z > 0) d = combine(d, sdfOf(uOp2, uOpMode.z, p, uOpFrame2, uOpRot.z, uOpPad.z), uOpKind.z);
-  if (uTear > 0.0) {
-    // Anchored to the layer, so a torn edge travels with it.
-    vec2 q = toLocal(p, uFrame, uRot) * uFrame.zw;
-    float n = fbm(q * uTearScale + uSeed * 7.13);
-    d += (n - 0.5) * 2.4 * uTear;
+  // Anchored to the layer, so a torn edge travels with it.
+  vec2 q = toLocal(p, uFrame, uRot) * uFrame.zw;
+  for (int i = 0; i < 4; i++) {
+    if (i >= uTears) break;
+    vec4 t = uTear[i];
+    d += (fbm(q * t.y + t.z * 7.13) - 0.5) * 2.4 * t.x;
   }
   outColor = vec4(d, 0.0, 0.0, 1.0);
 }`;
@@ -223,6 +240,7 @@ uniform sampler2D uBase;
 uniform sampler2D uSrc;
 uniform sampler2D uDist;
 uniform vec2 uDesign;
+uniform vec4 uView;
 uniform vec4 uFrame;
 uniform float uRot;
 uniform float uPad;
@@ -243,6 +261,11 @@ uniform float uWidth;
 uniform int uAlign;
 uniform float uOffset;
 uniform float uFibers;
+// A border's sides: 0 all, 1 top, 2 bottom, 3 left, 4 right.
+uniform int uSide;
+// Grain: pixels per cell, and the clock it shimmers on.
+uniform float uGrainPx;
+uniform float uTime;
 uniform float uTearScale;
 uniform float uSeed;
 uniform float uOpacity;
@@ -251,11 +274,11 @@ in vec2 vUv;
 out vec4 outColor;
 ${COMMON}
 vec4 readInput(vec2 q) {
-  return uInput == 1 ? vec4(atArt(uBase, q, uDesign).rgb, 1.0) : atArt(uPrev, q, uDesign);
+  return uInput == 1 ? vec4(atArt(uBase, q, uView).rgb, 1.0) : atArt(uPrev, q, uView);
 }
 
 void main() {
-  vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uDesign;
+  vec2 p = artAt(vUv, uView);
   vec4 prev = texture(uPrev, vUv);
   vec2 l = toLocal(p, uFrame, uRot);
   float d = texture(uDist, vUv).r;
@@ -288,12 +311,32 @@ void main() {
     float hi = lo + w;
     s = texture(uSrc, vUv);
     s.a *= smoothstep(lo - aa, lo + aa, d) * smoothstep(hi + aa, hi - aa, d);
+    if (uSide > 0) {
+      // The wedge of the frame facing that way, corner to corner.
+      vec2 u = (l - 0.5) * 2.0;
+      float k = uSide == 1 ? -u.y - abs(u.x)
+        : uSide == 2 ? u.y - abs(u.x)
+        : uSide == 3 ? -u.x - abs(u.y)
+        : u.x - abs(u.y);
+      float fw = max(fwidth(k), 1e-4);
+      s.a *= smoothstep(-fw, fw, k);
+    }
   } else {
     s = readInput(p);
     if (uOp == 2) s.rgb = vec3(luma(s.rgb));
     if (uOp == 3) s.rgb = 1.0 - s.rgb;
     if (uOp == 4) s.rgb = floor(s.rgb * uAmount + 0.5) / uAmount;
     if (uOp == 5) s.rgb = vec3(step(uAmount, luma(s.rgb)));
+    if (uOp == 10) {
+      vec2 cell = floor(gl_FragCoord.xy / max(uGrainPx, 1.0));
+      vec2 q = fract((cell + fract(uTime * 7.31) * 113.0) * vec2(443.897, 441.423));
+      q += dot(q, q.yx + 19.19);
+      s.rgb = clamp(s.rgb + (fract((q.x + q.y) * q.x) - 0.5) * uAmount, 0.0, 1.0);
+    }
+    if (uOp == 11) {
+      vec2 dv = p / uDesign - 0.5;
+      s.rgb *= 1.0 - uAmount * smoothstep(0.2, 0.8, dot(dv, dv) * 2.0);
+    }
     if (uOp == 6) {
       float t = bayer4(floor(l * uFrame.zw / uAmount));
       s.rgb = mix(uInk, uPaper, step(t, luma(s.rgb)));
@@ -350,6 +393,7 @@ uniform sampler2D uLayer;
 uniform sampler2D uDist;
 uniform sampler2D uMask;
 uniform vec2 uDesign;
+uniform vec4 uView;
 uniform int uShadows;
 uniform vec4 uShadowGeo[8];
 uniform vec4 uShadowColor[8];
@@ -363,8 +407,9 @@ in vec2 vUv;
 out vec4 outColor;
 ${COMMON}
 void main() {
-  vec3 base = texture(uBase, vUv).rgb;
-  vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uDesign;
+  // The artwork so far, or a folder's layers so far (which can be clear).
+  vec4 base = texture(uBase, vUv);
+  vec2 p = artAt(vUv, uView);
   float aa = max(fwidth(texture(uDist, vUv).r), 1e-3) * 0.7;
   vec4 src = texture(uLayer, vUv);
 
@@ -379,14 +424,52 @@ void main() {
   for (int i = 0; i < 8; i++) {
     if (i >= uShadows) break;
     vec4 g = uShadowGeo[i];
-    float ds = atArt(uDist, p - g.xy, uDesign).r;
+    float ds = atArt(uDist, p - g.xy, uView).r;
     float b = g.z * 0.5 + aa;
     float sh = uShadowColor[i].a * smoothstep(b, -b, ds) * uOpacity * mv;
-    base = mix(base, uShadowColor[i].rgb, sh);
+    base = over(base, uShadowColor[i].rgb, sh, 0);
   }
 
-  float a = src.a * uOpacity * mv;
-  outColor = vec4(mix(base, clamp(blend(base, src.rgb, uBlend), 0.0, 1.0), a), 1.0);
+  outColor = over(base, src.rgb, src.a * uOpacity * mv, uBlend);
+}`;
+
+// A folder's composited layers onto what's below it. Mode 0 lays the folder
+// itself (opacity, blend, mask); mode 1 lays one of its shadows: a blurred
+// copy of its alpha, offset and tinted.
+export const GROUP_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D uBase;
+uniform sampler2D uSrc;
+uniform sampler2D uMask;
+uniform vec4 uView;
+uniform int uMode;
+uniform vec2 uOffset;
+uniform vec4 uColor;
+uniform int uMaskMode;
+uniform bool uMaskInvert;
+uniform vec4 uMaskFrame;
+uniform float uMaskRot;
+uniform float uOpacity;
+uniform int uBlend;
+in vec2 vUv;
+out vec4 outColor;
+${COMMON}
+void main() {
+  vec4 base = texture(uBase, vUv);
+  vec2 p = artAt(vUv, uView);
+  float mv = 1.0;
+  if (uMaskMode > 0) {
+    vec4 m = texture(uMask, vUv);
+    mv = (uMaskMode == 2 ? luma(m.rgb) * m.a : m.a) * inside(toLocal(p, uMaskFrame, uMaskRot));
+    if (uMaskInvert) mv = 1.0 - mv;
+  }
+  if (uMode == 1) {
+    float a = atArt(uSrc, p - uOffset, uView).a * uColor.a * uOpacity * mv;
+    outColor = over(base, uColor.rgb, a, 0);
+  } else {
+    vec4 g = texture(uSrc, vUv);
+    outColor = over(base, g.rgb, g.a * uOpacity * mv, uBlend);
+  }
 }`;
 
 export const POST_FRAG = /* glsl */ `
@@ -397,6 +480,9 @@ uniform float uTime;
 uniform float uGrain;
 uniform float uGrainSize;
 uniform float uVignette;
+uniform vec4 uView;
+uniform vec2 uDesign;
+uniform vec3 uSurround;
 in vec2 vUv;
 out vec4 outColor;
 
@@ -413,9 +499,12 @@ void main() {
     float n = hash(cell + fract(uTime * 7.31) * 113.0) - 0.5;
     c += n * uGrain;
   }
+  // Where this pixel is on the artwork, 0..1; outside it is the surround.
+  vec2 art = (uView.xy + vec2(vUv.x, 1.0 - vUv.y) * uView.zw) / uDesign;
   if (uVignette > 0.0) {
-    vec2 d = vUv - 0.5;
+    vec2 d = art - 0.5;
     c *= 1.0 - uVignette * smoothstep(0.2, 0.8, dot(d, d) * 2.0);
   }
-  outColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+  bool past = any(lessThan(art, vec2(0.0))) || any(greaterThan(art, vec2(1.0)));
+  outColor = vec4(past ? uSurround : clamp(c, 0.0, 1.0), 1.0);
 }`;

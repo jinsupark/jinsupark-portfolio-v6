@@ -21,6 +21,9 @@ export type ShapeKind = 'rect' | 'ellipse' | 'polygon' | 'star' | 'path';
 export type ShapeDoc = {
   kind: ShapeKind;
   radius: number; // rect corner radius, design units
+  // Per-corner radii (top-left, top-right, bottom-right, bottom-left); when
+  // set they replace `radius`.
+  radii?: [number, number, number, number];
   sides: number; // polygon
   points: number; // star
   inner: number; // star inner radius, as a share of the outer
@@ -91,22 +94,31 @@ export function verticesOf(s: ShapeDoc, w: number, h: number): Vertex[] {
       );
     }
     default: {
-      const r = Math.max(0, Math.min(s.radius, w / 2, h / 2));
-      if (r < 0.01)
+      const [tl, tr, br, bl] = (
+        s.radii ?? [s.radius, s.radius, s.radius, s.radius]
+      ).map((r) => Math.max(0, Math.min(r, w / 2, h / 2)));
+      if (Math.max(tl, tr, br, bl) < 0.01)
         return [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)];
-      const rx = r / w;
-      const ry = r / h;
-      const kx = rx * K;
-      const ky = ry * K;
+      // Each corner's radius as a share of the frame, and its handle length.
+      const c = (r: number) => ({
+        x: r / w,
+        y: r / h,
+        kx: (r / w) * K,
+        ky: (r / h) * K,
+      });
+      const a = c(tl);
+      const b = c(tr);
+      const d = c(br);
+      const e = c(bl);
       return [
-        { x: rx, y: 0, ix: -kx, iy: 0, ox: 0, oy: 0 },
-        { x: 1 - rx, y: 0, ix: 0, iy: 0, ox: kx, oy: 0 },
-        { x: 1, y: ry, ix: 0, iy: -ky, ox: 0, oy: 0 },
-        { x: 1, y: 1 - ry, ix: 0, iy: 0, ox: 0, oy: ky },
-        { x: 1 - rx, y: 1, ix: kx, iy: 0, ox: 0, oy: 0 },
-        { x: rx, y: 1, ix: 0, iy: 0, ox: -kx, oy: 0 },
-        { x: 0, y: 1 - ry, ix: 0, iy: ky, ox: 0, oy: 0 },
-        { x: 0, y: ry, ix: 0, iy: 0, ox: 0, oy: -ky },
+        { x: a.x, y: 0, ix: -a.kx, iy: 0, ox: 0, oy: 0 },
+        { x: 1 - b.x, y: 0, ix: 0, iy: 0, ox: b.kx, oy: 0 },
+        { x: 1, y: b.y, ix: 0, iy: -b.ky, ox: 0, oy: 0 },
+        { x: 1, y: 1 - d.y, ix: 0, iy: 0, ox: 0, oy: d.ky },
+        { x: 1 - d.x, y: 1, ix: d.kx, iy: 0, ox: 0, oy: 0 },
+        { x: e.x, y: 1, ix: 0, iy: 0, ox: -e.kx, oy: 0 },
+        { x: 0, y: 1 - e.y, ix: 0, iy: e.ky, ox: 0, oy: 0 },
+        { x: 0, y: a.y, ix: 0, iy: 0, ox: 0, oy: -a.ky },
       ];
     }
   }

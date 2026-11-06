@@ -15,6 +15,7 @@ import {
   Section,
   SelectField,
   SortableList,
+  Tip,
 } from './ui';
 
 const randomSeed = () => 1 + Math.floor(Math.random() * 999);
@@ -58,26 +59,30 @@ export function AddMenu({
   onPick: (value: string, el: HTMLElement) => void;
 }) {
   return (
-    <label
-      title={title}
-      className="relative grid size-6 cursor-pointer place-items-center rounded-md text-neutral-500 hover:bg-black/5 hover:text-neutral-900"
-    >
-      <Plus size={13} />
-      <select
-        value=""
-        onChange={(e) =>
-          e.target.value && onPick(e.target.value, e.currentTarget)
-        }
-        className="absolute inset-0 cursor-pointer opacity-0"
+    <Tip label={title}>
+      <label
+        aria-label={title}
+        className="relative grid size-6 cursor-pointer place-items-center rounded-md text-neutral-500 hover:bg-black/5 hover:text-neutral-900"
       >
-        <option value="">{title}…</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
+        <Plus size={13} />
+        <select
+          value=""
+          onChange={(e) =>
+            e.target.value && onPick(e.target.value, e.currentTarget)
+          }
+          className="absolute inset-0 cursor-pointer opacity-0"
+        >
+          <option value="" disabled hidden>
+            {title}…
           </option>
-        ))}
-      </select>
-    </label>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </Tip>
   );
 }
 

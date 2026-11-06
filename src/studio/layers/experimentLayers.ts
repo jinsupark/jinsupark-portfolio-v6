@@ -44,6 +44,7 @@ export const gridLayer = defineLayer({
   version: 1,
   schema: gridControls.schema,
   initial: () => ({ ...gridControls.values }),
+  store: gridControls,
   create() {
     // The terminal windows use the terminal experiment's saved defaults; a
     // layer has no terminal controls of its own.
@@ -61,6 +62,7 @@ export const blueprintLayer = defineLayer({
   version: 1,
   schema: blueprintControls.schema,
   initial: () => ({ ...blueprintControls.values }),
+  store: blueprintControls,
   create() {
     const r = new BlueprintRenderer();
     return canvasLayer<BlueprintValues>(
@@ -76,6 +78,7 @@ export const pathLayer = defineLayer({
   version: 1,
   schema: pathControls.schema,
   initial: () => ({ ...pathControls.values }),
+  store: pathControls,
   shapeStyle: true,
   create() {
     const r = new PathRenderer();
@@ -91,6 +94,7 @@ export const scatterLayer = defineLayer({
   version: 1,
   schema: scatterControls.schema,
   initial: () => ({ ...scatterControls.values }),
+  store: scatterControls,
   create() {
     const r = new ScatterRenderer();
     return canvasLayer<ScatterValues>(
@@ -107,6 +111,7 @@ export const cursorLayer = defineLayer({
   version: 1,
   schema: cursorControls.schema,
   initial: () => ({ ...cursorControls.values }),
+  store: cursorControls,
   create() {
     const r = new CursorRenderer();
     return canvasLayer<CursorValues>(
@@ -122,6 +127,7 @@ export const mapLayer = defineLayer({
   version: 1,
   schema: mapControls.schema,
   initial: () => ({ ...mapControls.values }),
+  store: mapControls,
   create() {
     const r = new MapRenderer();
     return canvasLayer<MapValues>((ctx, w, h, dt, v) =>
@@ -136,6 +142,7 @@ export const collageLayer = defineLayer({
   version: 1,
   schema: collageControls.schema,
   initial: () => ({ ...collageControls.values }),
+  store: collageControls,
   create() {
     const r = new CollageRenderer();
     return canvasLayer<CollageValues>((ctx, w, h, dt, v) =>
@@ -150,6 +157,7 @@ export const terminalLayer = defineLayer({
   version: 1,
   schema: terminalControls.schema,
   initial: () => ({ ...terminalControls.values }),
+  store: terminalControls,
   create() {
     const wall = new TerminalWall();
     return canvasLayer<TermValues>((ctx, w, h, dt, v) =>

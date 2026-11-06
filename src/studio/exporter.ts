@@ -1,5 +1,5 @@
 import { Compositor } from './compositor';
-import { DESIGN, type Artwork, type ExportDoc } from './document';
+import { sizeOf, type Artwork, type ExportDoc } from './document';
 import type { LayerType } from './layer';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -12,8 +12,9 @@ export async function renderArtwork(
   types: Record<string, LayerType>,
   { scale, format }: ExportDoc,
 ): Promise<Blob> {
-  const w = Math.round(DESIGN.w * scale);
-  const h = Math.round(DESIGN.h * scale);
+  const size = sizeOf(doc);
+  const w = Math.round(size.w * scale);
+  const h = Math.round(size.h * scale);
   const canvas = document.createElement('canvas');
   const c = new Compositor(canvas);
   try {

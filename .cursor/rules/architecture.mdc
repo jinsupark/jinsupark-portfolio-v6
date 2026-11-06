@@ -103,6 +103,72 @@ Home with a short about and contact links.
 
  `field-notes` was checked against a pre-change render: no visible difference, only
  antialiasing along the torn edge.
+- **Canvas size per artwork.** `Artwork.size` is in design units; when absent it's `DESIGN`
+ (800×1000), which older work keeps. Read it with `sizeOf(doc)`, never `DESIGN` directly.
+ - `ASPECTS` holds presets with the long side at 1000. The Artwork panel's Canvas section has
+ them plus W/H.
+ - `resizeArtwork` keeps layers where they are and stretches only layers that filled the old
+ canvas.
+- **Pan and zoom** (`ArtworkPlayer navigable`):
+ - The canvas always covers the container, and the compositor renders just the visible
+ rectangle, `setView(view, surround)`. Every pass maps a pixel to an artwork position with
+ `artAt(uv, uView)` and reads buffers with `atArt(t, p, uView)`. The post pass paints the
+ surround outside the artwork.
+ - Cost stays the same at any zoom. Layer textures are drawn at pixels per design unit, so
+ they sharpen as you zoom in, up to each one's size cap.
+ - Input: pinch or ⌘-scroll zooms at the pointer; scroll, Space-drag or middle-drag pans;
+ ⌘+ / ⌘− / ⌘0 (100% is one design unit per CSS px); ⇧1 fits. The % readout in the corner
+ also fits.
+ - Overlays stay aligned because they live in the zoomed artwork box, in design units.
+ - Save renders its thumbnail offscreen, so it never depends on the view.
+- **Border types:** `STROKES` (Line, Paper fibres); fibres is the only type that wobbles. The
+ UI says Border, the code says stroke. The Shape section always shows, even on plain frames.
+- **Outline effects** (`OutlineDoc`, `OUTLINES`, `outlineOf`) are added under Shape with +.
+ - Torn edge and Feather to start.
+ - Tears stack, up to 4, summed in `DIST_FRAG`. Feathers add.
+ - Paper-fibre borders follow the first tear's frequency and seed.
+ - Old `edge.tear` and `edge.feather` convert into entries.
+- **Canvas selection, like Paper and Figma** (`ShapeOverlay`, select tool):
+ - Pressing a layer selects and moves it in one gesture.
+ - Dragging from the surround, or from a layer covering the whole canvas, draws a selection
+ box. Layers join the selection live as the box touches them. A background is only picked
+ up when it's covered whole. Shift adds.
+ - A giant transparent rect in the SVG catches presses on the surround.
+ - The layer under the pointer, or hovered in the layer list, gets a blue outline.
+- **Folders are layers** (`GroupDoc`):
+ - Each has `parent` (nesting), `visible`, `opacity`, `blend`, `filters`, `shadows` and
+ `mask`. Layers name their direct folder in `group`; `chainOf(doc, layer)` gives the folders
+ outermost first.
+ - Everything under a folder stays in one block of the stack.
+ - In a selection a folder is `g:<id>` (`folderKey`), and `layersOf` expands it to its
+ layers. The FolderInspector shows Layout, Blending, Shadow, Filters and Mask.
+ - ⌘G wraps whole folders whose layers are all selected, which is how folders nest.
+ ⌘⇧G takes layers up one level, or dissolves a selected folder.
+ - **Compositor:** a plain folder (`plainFolder`) draws straight into its parent. One with
+ effects composites its layers into a buffer of its own (one pair per nesting level in
+ `folders`), runs its filters there, then lays its shadows (a blurred copy of its alpha) and
+ itself onto the parent with `GROUP_FRAG`.
+ - `LAYER_FRAG` and `GROUP_FRAG` use `over()` (straight alpha), so they work over a clear
+ folder buffer and give exactly the old result over the opaque artwork.
+- **Lock:** `LayerDoc.locked`, toggled from the lock on row hover or ⇧⌘L. Locked layers aren't
+ hit, boxed, moved or nudged on the canvas.
+- **Performance:** the view-sized buffers are scissored to the artwork's rectangle plus 48px,
+ so a zoomed-out canvas isn't paying for the surround.
+- **Heat and idle cost** (`ArtworkPlayer`):
+ - Animation runs at 30fps, not every frame.
+ - The studio's play/pause button (by the zoom %, remembered as `studio:play`) stops it.
+ Paused, the player renders only when the compositor is `dirty` (document, view or size
+ changed), plus 20 settling frames so images that are still loading appear.
+ - `canvasLayer(..., still)` draws once per values and size; Solid / gradient uses it.
+ - Measured on `field-notes`: 30 renders a second playing, 0 paused at idle, 20 after an
+ edit.
+- **Keyboard:** Space pans unless a text field has focus, and clicking the canvas blurs panel
+ controls so tool keys reach it.
+- **Artwork title** (`ArtworkTitle.tsx`), at the top of the sidebar:
+ - Double-click to rename. Click for the menu: slug, Featured on Home, open another work,
+ New artwork.
+ - An unsaved artwork's slug follows its name. The description field is gone from the UI;
+ `about` stays in the file.
 - **Export** (`exporter.ts`): renders in its own offscreen `Compositor` at `scale` × design
  size and downloads a PNG or JPG. Presets live in `Artwork.exports`. The Export section is in
  the artwork panel, and ⇧⌘E exports every preset.
@@ -204,6 +270,20 @@ Home with a short about and contact links.
  whole.
 
 ## Pages
+- `/projects`: the public projects page, with tabs (`?tab=`).
+ - **Works:** thumbnails.
+ - **Shaders:** every built-in fill type, with thumbnails rendered offscreen one at a time
+ (`studio/shaders.ts`, `shaderThumb`).
+ - **Experiments:** the page-only ones (poster, glass, droplet, cloud).
+- `/shaders/$type`: the **shader playground** (`ShaderPlayground.tsx`).
+ - One shader fills a canvas, rendered by the same compositor as an artwork
+ (`shaderArtwork`), with pan and zoom and an aspect choice.
+ - Its settings edit the experiment's own control store (`LayerType.store`), which new fills
+ of that type start from.
+ - "Save as defaults" (dev only) writes the store's preset.
+ - Types without a store (solid, video) are tuned locally only.
+ - `/experiments` and `/experiments/<shader>` redirect there; page-only experiments keep their
+ pages.
 - `/` Home is **drawn by WebGL with water on it** (`src/home/`).
  - **The HTML is the real page.** It provides layout, links, selection and screen readers. Once the copy
  is up it gets `data-gl="live"` (opacity 0). If WebGL fails it simply stays

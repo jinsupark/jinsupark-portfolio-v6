@@ -104,7 +104,23 @@ if (drag) {
       button: 'left',
       buttons,
       clickCount: 1,
+      // MODS=1 holds Alt/Option, 8 Shift, 4 Meta (CDP's modifier bits).
+      modifiers: Number(process.env.MODS ?? 0),
     });
+  // HOLD=Space holds a real key through the drag (e.g. to pan).
+  const hold = process.env.HOLD;
+  const key = (type) =>
+    send('Input.dispatchKeyEvent', {
+      type,
+      key: hold === 'Space' ? ' ' : hold,
+      code: hold,
+      windowsVirtualKeyCode: hold === 'Space' ? 32 : 0,
+    });
+  if (hold) {
+    await mouse('mouseMoved', pts[0], 0);
+    await key('keyDown');
+    await sleep(100);
+  }
   await mouse('mousePressed', pts[0], 1);
   for (let i = 1; i < pts.length; i++) {
     const [ax, ay] = pts[i - 1];
@@ -119,6 +135,7 @@ if (drag) {
     }
   }
   await mouse('mouseReleased', pts.at(-1), 0);
+  if (hold) await key('keyUp');
   await sleep(800);
 }
 

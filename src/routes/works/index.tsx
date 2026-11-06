@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { WORKS } from '@/works';
+import { sizeOf } from '@/studio/document';
 
 export const Route = createFileRoute('/works/')({
   component: Works,
@@ -19,7 +20,12 @@ function Works() {
         {WORKS.map((w) => (
           <li key={w.slug}>
             <Link to="/works/$slug" params={{ slug: w.slug }} className="group">
-              <div className="aspect-[4/5] overflow-hidden bg-neutral-200">
+              <div
+                className="overflow-hidden bg-neutral-200"
+                style={{
+                  aspectRatio: `${sizeOf(w.doc).w} / ${sizeOf(w.doc).h}`,
+                }}
+              >
                 {w.thumb && (
                   <img
                     src={w.thumb}

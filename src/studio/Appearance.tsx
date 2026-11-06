@@ -4,11 +4,13 @@ import {
   Droplet,
   Eye,
   EyeOff,
+  Feather,
   Grid2x2,
   Layers,
   Minus,
   Plus,
   ScanLine,
+  Scissors,
   SlidersHorizontal,
   SunMoon,
   type LucideIcon,
@@ -18,10 +20,12 @@ import { defaultsOf, fit } from '@/lab/controls';
 import {
   layerId,
   newFilter,
+  newOutline,
   newShadow,
   newStroke,
   type ExportDoc,
   type FilterDoc,
+  type OutlineDoc,
   type ShadowDoc,
   type StrokeDoc,
 } from './document';
@@ -30,8 +34,10 @@ import type { LayerType } from './layer';
 import {
   FILTERS,
   filterInputSchema,
+  OUTLINES,
   shadowSchema,
   strokeSchema,
+  STROKES,
 } from './studioSchemas';
 import { blendOptions, popoverAt } from './tools';
 import {
@@ -47,6 +53,16 @@ import {
 } from './ui';
 
 type At = { id: string; top: number; left: number };
+
+const strokeOptions = Object.entries(STROKES).map(([value, s]) => ({
+  value,
+  label: s.label,
+}));
+const ALIGN_LABELS: Record<string, string> = {
+  inside: 'Inside',
+  center: 'Centre',
+  outside: 'Outside',
+};
 
 // Patch one item of a list by id.
 const patchIn = <T extends { id: string }>(
@@ -99,73 +115,92 @@ export function StrokeList({
     onStrokes(patchIn(strokes, id, p));
   return (
     <Section
-      id="insp:Stroke"
-      title="Stroke"
+      id="insp:Border"
+      title="Border"
       aside={
-        <IconButton
-          title="Add a stroke"
-          onClick={() => onStrokes([...strokes, newStroke()])}
-        >
-          <Plus size={13} />
-        </IconButton>
+        <AddMenu
+          title="Add a border"
+          options={strokeOptions}
+          onPick={(type, el) => {
+            const s = newStroke(type);
+            onStrokes([...strokes, s]);
+            setOpen({ id: s.id, ...popoverAt(el) });
+          }}
+        />
       }
     >
-      <SortableList
-        items={strokes}
-        onItems={onStrokes}
-        active={open?.id}
-        row={(s) => (
-          <>
-            <button
-              onClick={(e) =>
-                open?.id === s.id
-                  ? setOpen(null)
-                  : setOpen({ id: s.id, ...popoverAt(e.currentTarget) })
-              }
-              className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${s.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
-            >
-              <Swatch f={s.fills.at(-1)} />
-              <span className="truncate">
-                {s.align === 'center'
-                  ? 'Centre'
-                  : s.align === 'inside'
-                    ? 'Inside'
-                    : 'Outside'}
-                {s.fibers > 0 ? ' · fibres' : ''}
-              </span>
-            </button>
-            <NumberField
-              value={s.width}
-              onChange={(width) => patch(s.id, { width })}
-              min={0.1}
-              max={80}
-              step={0.1}
-              prefix={<CircleDashed size={11} />}
-              className="w-16 shrink-0"
-            />
-            <VisibleToggle
-              on={s.visible}
-              what="stroke"
-              onToggle={() => patch(s.id, { visible: !s.visible })}
-            />
-            <Remove
-              what="stroke"
-              onClick={() => onStrokes(strokes.filter((x) => x.id !== s.id))}
-            />
-          </>
-        )}
-      />
+      {strokes.length > 0 && (
+        <SortableList
+          items={strokes}
+          onItems={onStrokes}
+          active={open?.id}
+          row={(s) => (
+            <>
+              <button
+                onClick={(e) =>
+                  open?.id === s.id
+                    ? setOpen(null)
+                    : setOpen({ id: s.id, ...popoverAt(e.currentTarget) })
+                }
+                className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${s.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
+              >
+                <Swatch f={s.fills.at(-1)} />
+                <span className="truncate">
+                  {STROKES[s.type]?.label ?? s.type}
+                </span>
+                <span className="shrink-0 text-neutral-400">
+                  {ALIGN_LABELS[s.align]}
+                  {s.sides && s.sides !== 'all' ? ` · ${s.sides}` : ''}
+                </span>
+              </button>
+              <NumberField
+                value={s.width}
+                onChange={(width) => patch(s.id, { width })}
+                min={0.1}
+                max={80}
+                step={0.1}
+                prefix={<CircleDashed size={11} />}
+                className="w-16 shrink-0"
+              />
+              <VisibleToggle
+                on={s.visible}
+                what="border"
+                onToggle={() => patch(s.id, { visible: !s.visible })}
+              />
+              <Remove
+                what="border"
+                onClick={() => onStrokes(strokes.filter((x) => x.id !== s.id))}
+              />
+            </>
+          )}
+        />
+      )}
       {open && current && (
         <Popover
           key={current.id}
-          title="Stroke"
+          title={STROKES[current.type]?.label ?? 'Border'}
           at={open}
           onClose={() => setOpen(null)}
         >
           <div className="space-y-1.5 border-b border-black/6 p-3">
+            <Labeled label="border">
+              <SelectField
+                value={current.type}
+                options={strokeOptions}
+                onChange={(type) => {
+                  const fresh = newStroke(type);
+                  // Fibres start from their own default amount.
+                  patch(current.id, {
+                    type,
+                    ...(type === 'fibres' &&
+                      !(current.fibers > 0) && { fibers: fresh.fibers }),
+                  });
+                }}
+              />
+            </Labeled>
             <Rows
-              schema={strokeSchema}
-              values={current}
+              schema={{ ...strokeSchema, ...STROKES[current.type]?.schema }}
+              values={{ sides: 'all', ...current }}
               onChange={(k, v) => patch(current.id, { [k]: v })}
             />
             <Labeled label="opacity">
@@ -227,48 +262,50 @@ export function ShadowList({
         </IconButton>
       }
     >
-      <SortableList
-        items={shadows}
-        onItems={onShadows}
-        active={open?.id}
-        row={(s) => (
-          <>
-            <button
-              onClick={(e) =>
-                open?.id === s.id
-                  ? setOpen(null)
-                  : setOpen({ id: s.id, ...popoverAt(e.currentTarget) })
-              }
-              className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${s.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
-            >
-              <span
-                className="size-4 shrink-0 rounded-[3px] border border-black/15"
-                style={{ background: s.color }}
+      {shadows.length > 0 && (
+        <SortableList
+          items={shadows}
+          onItems={onShadows}
+          active={open?.id}
+          row={(s) => (
+            <>
+              <button
+                onClick={(e) =>
+                  open?.id === s.id
+                    ? setOpen(null)
+                    : setOpen({ id: s.id, ...popoverAt(e.currentTarget) })
+                }
+                className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${s.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
+              >
+                <span
+                  className="size-4 shrink-0 rounded-[3px] border border-black/15"
+                  style={{ background: s.color }}
+                />
+                <span className="truncate">Drop shadow</span>
+              </button>
+              <NumberField
+                value={s.opacity}
+                onChange={(opacity) => patch(s.id, { opacity })}
+                min={0}
+                max={1}
+                step={0.01}
+                factor={100}
+                suffix="%"
+                className="w-14 shrink-0"
               />
-              <span className="truncate">Drop shadow</span>
-            </button>
-            <NumberField
-              value={s.opacity}
-              onChange={(opacity) => patch(s.id, { opacity })}
-              min={0}
-              max={1}
-              step={0.01}
-              factor={100}
-              suffix="%"
-              className="w-14 shrink-0"
-            />
-            <VisibleToggle
-              on={s.visible}
-              what="shadow"
-              onToggle={() => patch(s.id, { visible: !s.visible })}
-            />
-            <Remove
-              what="shadow"
-              onClick={() => onShadows(shadows.filter((x) => x.id !== s.id))}
-            />
-          </>
-        )}
-      />
+              <VisibleToggle
+                on={s.visible}
+                what="shadow"
+                onToggle={() => patch(s.id, { visible: !s.visible })}
+              />
+              <Remove
+                what="shadow"
+                onClick={() => onShadows(shadows.filter((x) => x.id !== s.id))}
+              />
+            </>
+          )}
+        />
+      )}
       {open && current && (
         <Popover
           key={current.id}
@@ -339,69 +376,65 @@ export function FilterList({
         />
       }
     >
-      <SortableList
-        items={filters}
-        onItems={onFilters}
-        active={open?.id}
-        row={(f) => {
-          const def = FILTERS[f.type];
-          const Icon = FILTER_ICONS[f.type] ?? SlidersHorizontal;
-          const v = valuesOf(f);
-          const main = def?.main;
-          const control = main ? def.schema[main] : undefined;
-          return (
-            <>
-              <SelectField
-                value={f.type}
-                options={filterOptions}
-                onChange={(type) =>
-                  patch(f.id, {
-                    type,
-                    values: defaultsOf(FILTERS[type].schema),
-                  })
-                }
-                className={`min-w-0 flex-1 ${f.visible ? '' : 'text-neutral-400'}`}
-              />
-              {control?.kind === 'range' ? (
-                <NumberField
-                  value={Number(v[main!])}
-                  onChange={(x) =>
-                    patch(f.id, { values: { ...v, [main!]: x } })
+      {filters.length > 0 && (
+        <SortableList
+          items={filters}
+          onItems={onFilters}
+          active={open?.id}
+          row={(f) => {
+            const def = FILTERS[f.type];
+            const Icon = FILTER_ICONS[f.type] ?? SlidersHorizontal;
+            const v = valuesOf(f);
+            const main = def?.main;
+            const control = main ? def.schema[main] : undefined;
+            return (
+              <>
+                <button
+                  onClick={(e) =>
+                    open?.id === f.id
+                      ? setOpen(null)
+                      : setOpen({ id: f.id, ...popoverAt(e.currentTarget) })
                   }
-                  min={control.min}
-                  max={control.max}
-                  step={control.step}
-                  prefix={<Icon size={11} />}
-                  className="w-16 shrink-0"
+                  className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${f.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
+                >
+                  <Icon
+                    size={14}
+                    strokeWidth={1.75}
+                    className="shrink-0 text-neutral-500"
+                  />
+                  <span className="truncate">{def?.label ?? f.type}</span>
+                  {f.input === 'background' && (
+                    <span className="shrink-0 text-neutral-400">behind</span>
+                  )}
+                </button>
+                {control?.kind === 'range' && (
+                  <NumberField
+                    value={Number(v[main!])}
+                    onChange={(x) =>
+                      patch(f.id, { values: { ...v, [main!]: x } })
+                    }
+                    min={control.min}
+                    max={control.max}
+                    step={control.step}
+                    className="w-14 shrink-0"
+                  />
+                )}
+                <VisibleToggle
+                  on={f.visible}
+                  what="filter"
+                  onToggle={() => patch(f.id, { visible: !f.visible })}
                 />
-              ) : (
-                <span className="w-16 shrink-0" />
-              )}
-              <IconButton
-                title="Filter settings"
-                active={open?.id === f.id}
-                onClick={(e) =>
-                  open?.id === f.id
-                    ? setOpen(null)
-                    : setOpen({ id: f.id, ...popoverAt(e.currentTarget) })
-                }
-                className="size-5!"
-              >
-                <SlidersHorizontal size={12} />
-              </IconButton>
-              <VisibleToggle
-                on={f.visible}
-                what="filter"
-                onToggle={() => patch(f.id, { visible: !f.visible })}
-              />
-              <Remove
-                what="filter"
-                onClick={() => onFilters(filters.filter((x) => x.id !== f.id))}
-              />
-            </>
-          );
-        }}
-      />
+                <Remove
+                  what="filter"
+                  onClick={() =>
+                    onFilters(filters.filter((x) => x.id !== f.id))
+                  }
+                />
+              </>
+            );
+          }}
+        />
+      )}
       {open && current && (
         <Popover
           key={current.id}
@@ -410,6 +443,18 @@ export function FilterList({
           onClose={() => setOpen(null)}
         >
           <div className="space-y-1.5 p-3">
+            <Labeled label="filter">
+              <SelectField
+                value={current.type}
+                options={filterOptions}
+                onChange={(type) =>
+                  patch(current.id, {
+                    type,
+                    values: defaultsOf(FILTERS[type].schema),
+                  })
+                }
+              />
+            </Labeled>
             <Row
               name="input"
               control={filterInputSchema}
@@ -512,6 +557,140 @@ export function ExportSection({
         {busy ? 'Exporting…' : 'Export'}
         {!busy && <span className="font-normal text-neutral-400">⇧⌘E</span>}
       </button>
+    </Section>
+  );
+}
+
+const OUTLINE_ICONS: Record<string, LucideIcon> = {
+  tear: Scissors,
+  feather: Feather,
+};
+const outlineOptions = Object.entries(OUTLINES).map(([value, o]) => ({
+  value,
+  label: o.label,
+}));
+
+// The Shape section: the shape's own settings (`children`), then changes to
+// the outline added with + — tears (which stack) and feathers. Each row is
+// its type and amount; the sliders button opens the rest.
+export function ShapeSection({
+  outline,
+  onOutline,
+  children,
+}: {
+  outline: OutlineDoc[];
+  onOutline: (next: OutlineDoc[]) => void;
+  children?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState<At | null>(null);
+  const current = open && outline.find((o) => o.id === open.id);
+  const patch = (id: string, p: Partial<OutlineDoc>) =>
+    onOutline(patchIn(outline, id, p));
+  const valuesOf = (o: OutlineDoc) => {
+    const schema = OUTLINES[o.type]?.schema ?? {};
+    return { ...defaultsOf(schema), ...fit(o.values, schema) };
+  };
+  return (
+    <Section
+      id="insp:Shape"
+      title="Shape"
+      aside={
+        <AddMenu
+          title="Add to the outline"
+          options={outlineOptions}
+          onPick={(type, el) => {
+            const o = newOutline(type, defaultsOf(OUTLINES[type].schema));
+            onOutline([...outline, o]);
+            setOpen({ id: o.id, ...popoverAt(el) });
+          }}
+        />
+      }
+    >
+      {children}
+      {outline.length > 0 && (
+        <SortableList
+          items={outline}
+          onItems={onOutline}
+          active={open?.id}
+          row={(o) => {
+            const def = OUTLINES[o.type];
+            const Icon = OUTLINE_ICONS[o.type] ?? SlidersHorizontal;
+            const v = valuesOf(o);
+            const control = def?.schema[def.main];
+            return (
+              <>
+                <span
+                  className={`flex min-w-0 flex-1 items-center gap-1.5 ${o.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
+                >
+                  <Icon
+                    size={13}
+                    strokeWidth={1.75}
+                    className="shrink-0 text-neutral-500"
+                  />
+                  <span className="truncate">{def?.label ?? o.type}</span>
+                </span>
+                {control?.kind === 'range' && (
+                  <NumberField
+                    value={Number(v[def.main])}
+                    onChange={(x) =>
+                      patch(o.id, { values: { ...v, [def.main]: x } })
+                    }
+                    min={control.min}
+                    max={control.max}
+                    step={control.step}
+                    className="w-16 shrink-0"
+                  />
+                )}
+                {def && Object.keys(def.schema).length > 1 ? (
+                  <IconButton
+                    title={`${def.label} settings`}
+                    active={open?.id === o.id}
+                    onClick={(e) =>
+                      open?.id === o.id
+                        ? setOpen(null)
+                        : setOpen({ id: o.id, ...popoverAt(e.currentTarget) })
+                    }
+                    className="size-5!"
+                  >
+                    <SlidersHorizontal size={12} />
+                  </IconButton>
+                ) : (
+                  <span className="size-5 shrink-0" />
+                )}
+                <VisibleToggle
+                  on={o.visible}
+                  what={def?.label.toLowerCase() ?? 'effect'}
+                  onToggle={() => patch(o.id, { visible: !o.visible })}
+                />
+                <Remove
+                  what={def?.label.toLowerCase() ?? 'effect'}
+                  onClick={() =>
+                    onOutline(outline.filter((x) => x.id !== o.id))
+                  }
+                />
+              </>
+            );
+          }}
+        />
+      )}
+      {open && current && (
+        <Popover
+          key={current.id}
+          title={OUTLINES[current.type]?.label ?? current.type}
+          at={open}
+          onClose={() => setOpen(null)}
+        >
+          <div className="space-y-1.5 p-3">
+            <Rows
+              schema={OUTLINES[current.type]?.schema ?? {}}
+              values={valuesOf(current)}
+              onChange={(k, x) =>
+                patch(current.id, { values: { ...valuesOf(current), [k]: x } })
+              }
+            />
+          </div>
+        </Popover>
+      )}
     </Section>
   );
 }

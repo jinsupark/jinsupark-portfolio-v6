@@ -37,6 +37,19 @@ export type LayerType<S extends Schema = Schema> = {
   // A shape style is built from the layer's outline (`LayerFrame.outline`)
   // and draws past it, rather than being a fill clipped to it.
   shapeStyle?: boolean;
+  // The experiment's control store a new fill of this type starts from, so
+  // the shader playground can tune it and save its defaults.
+  store?: ShaderStore;
+};
+
+// What the playground needs of a control store (`lab/controls.ts`).
+export type ShaderStore = {
+  values: Record<string, unknown>;
+  set(key: string, value: unknown): void;
+  reset(group?: string): void;
+  saveDefaults(): Promise<void>;
+  subscribe(listener: () => void): () => void;
+  getSnapshot(): Record<string, unknown>;
 };
 
 export const defineLayer = <S extends Schema>(t: LayerType<S>) =>
@@ -55,8 +68,12 @@ export function canvasLayer<V>(
     frame: LayerFrame,
   ) => void,
   dispose?: () => void,
+  // A drawing that only changes with its values and size (a solid fill) is
+  // drawn once and kept, instead of every frame.
+  still = false,
 ): LayerInstance {
   const canvas = document.createElement('canvas');
+  let drawn: unknown = null;
   canvas.width = canvas.height = 1;
   const ctx = canvas.getContext('2d')!;
   const texture = new THREE.CanvasTexture(canvas);
@@ -74,7 +91,10 @@ export function canvasLayer<V>(
         canvas.height = ph;
         // A resized canvas needs a fresh GL texture of the new size.
         texture.dispose();
+        drawn = null;
       }
+      if (still && drawn === values) return;
+      drawn = values;
       ctx.setTransform(pw / w, 0, 0, ph / h, 0, 0);
       draw(ctx, w, h, dt, values as V, frame);
       texture.needsUpdate = true;

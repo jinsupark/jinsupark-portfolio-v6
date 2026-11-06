@@ -10,15 +10,22 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as StudioRouteImport } from './routes/studio'
 import { Route as ExperimentsIndexRouteImport } from './routes/experiments/index'
 import { Route as ExperimentsSlugRouteImport } from './routes/experiments/$slug'
+import { Route as ShadersTypeRouteImport } from './routes/shaders/$type'
 import { Route as WorksIndexRouteImport } from './routes/works/index'
 import { Route as WorksSlugRouteImport } from './routes/works/$slug'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsRoute = ProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StudioRoute = StudioRouteImport.update({
@@ -36,6 +43,11 @@ const ExperimentsSlugRoute = ExperimentsSlugRouteImport.update({
   path: '/experiments/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ShadersTypeRoute = ShadersTypeRouteImport.update({
+  id: '/shaders/$type',
+  path: '/shaders/$type',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WorksIndexRoute = WorksIndexRouteImport.update({
   id: '/works/',
   path: '/works/',
@@ -49,16 +61,20 @@ const WorksSlugRoute = WorksSlugRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/projects': typeof ProjectsRoute
   '/studio': typeof StudioRoute
   '/experiments/$slug': typeof ExperimentsSlugRoute
+  '/shaders/$type': typeof ShadersTypeRoute
   '/works/$slug': typeof WorksSlugRoute
   '/experiments/': typeof ExperimentsIndexRoute
   '/works/': typeof WorksIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/projects': typeof ProjectsRoute
   '/studio': typeof StudioRoute
   '/experiments/$slug': typeof ExperimentsSlugRoute
+  '/shaders/$type': typeof ShadersTypeRoute
   '/works/$slug': typeof WorksSlugRoute
   '/experiments': typeof ExperimentsIndexRoute
   '/works': typeof WorksIndexRoute
@@ -66,8 +82,10 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/projects': typeof ProjectsRoute
   '/studio': typeof StudioRoute
   '/experiments/$slug': typeof ExperimentsSlugRoute
+  '/shaders/$type': typeof ShadersTypeRoute
   '/works/$slug': typeof WorksSlugRoute
   '/experiments/': typeof ExperimentsIndexRoute
   '/works/': typeof WorksIndexRoute
@@ -76,24 +94,30 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/projects'
     | '/studio'
     | '/experiments/$slug'
+    | '/shaders/$type'
     | '/works/$slug'
     | '/experiments/'
     | '/works/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/projects'
     | '/studio'
     | '/experiments/$slug'
+    | '/shaders/$type'
     | '/works/$slug'
     | '/experiments'
     | '/works'
   id:
     | '__root__'
     | '/'
+    | '/projects'
     | '/studio'
     | '/experiments/$slug'
+    | '/shaders/$type'
     | '/works/$slug'
     | '/experiments/'
     | '/works/'
@@ -101,8 +125,10 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ProjectsRoute: typeof ProjectsRoute
   StudioRoute: typeof StudioRoute
   ExperimentsSlugRoute: typeof ExperimentsSlugRoute
+  ShadersTypeRoute: typeof ShadersTypeRoute
   WorksSlugRoute: typeof WorksSlugRoute
   ExperimentsIndexRoute: typeof ExperimentsIndexRoute
   WorksIndexRoute: typeof WorksIndexRoute
@@ -115,6 +141,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects': {
+      id: '/projects'
+      path: '/projects'
+      fullPath: '/projects'
+      preLoaderRoute: typeof ProjectsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/studio': {
@@ -138,6 +171,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ExperimentsSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/shaders/$type': {
+      id: '/shaders/$type'
+      path: '/shaders/$type'
+      fullPath: '/shaders/$type'
+      preLoaderRoute: typeof ShadersTypeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/works/': {
       id: '/works/'
       path: '/works'
@@ -157,8 +197,10 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ProjectsRoute: ProjectsRoute,
   StudioRoute: StudioRoute,
   ExperimentsSlugRoute: ExperimentsSlugRoute,
+  ShadersTypeRoute: ShadersTypeRoute,
   WorksSlugRoute: WorksSlugRoute,
   ExperimentsIndexRoute: ExperimentsIndexRoute,
   WorksIndexRoute: WorksIndexRoute,

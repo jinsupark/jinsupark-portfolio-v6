@@ -23,26 +23,30 @@ export const solidLayer = defineLayer({
   schema: solidSchema,
   initial: () => defaultsOf(solidSchema),
   create: () =>
-    canvasLayer<Values<typeof solidSchema>>((ctx, w, h, _dt, v) => {
-      if (!v.gradient) {
-        ctx.fillStyle = v.color;
-      } else {
-        const a = (v.angle * Math.PI) / 180;
-        const r = (Math.abs(w * Math.sin(a)) + Math.abs(h * Math.cos(a))) / 2;
-        const dx = Math.sin(a) * r;
-        const dy = -Math.cos(a) * r;
-        const g = ctx.createLinearGradient(
-          w / 2 - dx,
-          h / 2 - dy,
-          w / 2 + dx,
-          h / 2 + dy,
-        );
-        g.addColorStop(0, v.color);
-        g.addColorStop(1, v.color2);
-        ctx.fillStyle = g;
-      }
-      ctx.fillRect(0, 0, w, h);
-    }),
+    canvasLayer<Values<typeof solidSchema>>(
+      (ctx, w, h, _dt, v) => {
+        if (!v.gradient) {
+          ctx.fillStyle = v.color;
+        } else {
+          const a = (v.angle * Math.PI) / 180;
+          const r = (Math.abs(w * Math.sin(a)) + Math.abs(h * Math.cos(a))) / 2;
+          const dx = Math.sin(a) * r;
+          const dy = -Math.cos(a) * r;
+          const g = ctx.createLinearGradient(
+            w / 2 - dx,
+            h / 2 - dy,
+            w / 2 + dx,
+            h / 2 + dy,
+          );
+          g.addColorStop(0, v.color);
+          g.addColorStop(1, v.color2);
+          ctx.fillStyle = g;
+        }
+        ctx.fillRect(0, 0, w, h);
+      },
+      undefined,
+      true,
+    ),
 });
 
 const videoSchema = {
@@ -68,6 +72,11 @@ export const videoLayer = defineLayer({
     return canvasLayer<Values<typeof videoSchema>>(
       (ctx, w, h, _dt, v) => {
         ctx.clearRect(0, 0, w, h);
+        // The element plays on its own clock: hold it while the artwork is
+        // paused (rendered with no time passing), run it otherwise.
+        if (_dt === 0) {
+          if (!el.paused) el.pause();
+        } else if (el.paused) void el.play().catch(() => {});
         if (!DemoVideos.ready(el)) return;
         if (started !== v.start) {
           el.currentTime = el.duration * v.start;
