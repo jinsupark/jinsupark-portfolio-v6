@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Brush as BrushIcon,
   Circle,
@@ -13,7 +14,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { defaultsOf, type Schema } from '@/lab/controls';
-import { BLEND_MODES, type LayerDoc } from './document';
+import { type BlendMode, type LayerDoc } from './document';
 import {
   contains,
   flatten,
@@ -72,20 +73,6 @@ export const TOOLS: {
   ],
 ];
 
-export const TOOL_HINTS: Record<Tool, string> = {
-  select: 'click a shape to select · drag to move · corners resize',
-  rect: 'drag to draw · shift for a square · click for a default size',
-  ellipse: 'drag to draw · shift for a circle',
-  triangle: 'drag to draw',
-  polygon: 'drag to draw · sides in the inspector',
-  star: 'drag to draw · points in the inspector',
-  pen: 'draw a closed shape freehand',
-  bezier:
-    'click to place points · drag to curve · click the first point or Enter to close · Backspace removes the last',
-  edit: 'drag points and handles · double-click the outline to add · alt-click a point for corner / smooth · delete removes',
-  smear: 'drag across the outline to push it',
-};
-
 // What a layer's row shows it as: its outline's kind, or a plain frame.
 export function kindIcon(l: LayerDoc): LucideIcon {
   const s = l.shape;
@@ -126,10 +113,36 @@ export function popoverAt(el: Element, width = POPOVER_W) {
   const from = (
     el.closest('[data-popover]') ?? el.closest('aside')
   )?.getBoundingClientRect();
-  return {
-    top: Math.max(8, Math.min(r.top - 8, innerHeight - 360)),
-    left: Math.max(8, (from?.left ?? r.left) - width - 4),
-  };
+  const top = Math.max(8, Math.min(r.top - 8, innerHeight - 360));
+  let left = (from?.left ?? r.left) - width - 4;
+  // Beside any popover already open there, rather than on top of it.
+  const open = [...document.querySelectorAll('[data-popover]')].map((p) =>
+    p.getBoundingClientRect(),
+  );
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const o of open)
+      if (left < o.right && left + width > o.left) {
+        left = o.left - width - 4;
+        moved = true;
+      }
+  }
+  return { top, left: Math.max(8, left) };
+}
+
+// Which items of a list have their popover open; several can be at once.
+export type At = { id: string; top: number; left: number };
+export function usePopovers() {
+  const [opens, setOpens] = useState<At[]>([]);
+  const isOpen = (id: string) => opens.some((o) => o.id === id);
+  const openAt = (id: string, el: Element) =>
+    setOpens((os) =>
+      os.some((o) => o.id === id) ? os : [...os, { id, ...popoverAt(el) }],
+    );
+  const close = (id: string) => setOpens((os) => os.filter((o) => o.id !== id));
+  const toggle = (id: string, el: Element) =>
+    isOpen(id) ? close(id) : openAt(id, el);
+  return { opens, isOpen, openAt, close, toggle };
 }
 
 // One group of a schema back to its defaults, the rest untouched.
@@ -144,7 +157,28 @@ export const resetGroup = (
   return next;
 };
 
-export const blendOptions = BLEND_MODES.map((m) => ({
+// Blend modes in Figma's groups: normal, darken, lighten, contrast,
+// difference. '-' entries are the menu's separators.
+const BLEND_GROUPS: (BlendMode | '-')[] = [
+  'normal',
+  '-',
+  'darken',
+  'multiply',
+  'color-burn',
+  '-',
+  'lighten',
+  'screen',
+  'color-dodge',
+  'add',
+  '-',
+  'overlay',
+  'soft-light',
+  'hard-light',
+  '-',
+  'difference',
+  'exclusion',
+];
+export const blendOptions = BLEND_GROUPS.map((m) => ({
   value: m,
-  label: m.replace('-', ' '),
+  label: m === '-' ? '' : m === 'add' ? 'plus lighter' : m.replace('-', ' '),
 }));

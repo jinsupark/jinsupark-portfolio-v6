@@ -312,14 +312,16 @@ void main() {
     s = texture(uSrc, vUv);
     s.a *= smoothstep(lo - aa, lo + aa, d) * smoothstep(hi + aa, hi - aa, d);
     if (uSide > 0) {
-      // The wedge of the frame facing that way, corner to corner.
-      vec2 u = (l - 0.5) * 2.0;
-      float k = uSide == 1 ? -u.y - abs(u.x)
-        : uSide == 2 ? u.y - abs(u.x)
-        : uSide == 3 ? -u.x - abs(u.y)
-        : u.x - abs(u.y);
-      float fw = max(fwidth(k), 1e-4);
-      s.a *= smoothstep(-fw, fw, k);
+      // One side only, as in Figma: the band along that edge, running the
+      // full length with square ends. \`inward\` is how far inside that edge.
+      vec2 px = l * uFrame.zw;
+      float inward = uSide == 1 ? px.y
+        : uSide == 2 ? uFrame.w - px.y
+        : uSide == 3 ? px.x
+        : uFrame.z - px.x;
+      float reach = max(-lo, 0.0);
+      float fw = max(fwidth(inward), 1e-4);
+      s.a *= smoothstep(reach + fw, reach - fw, inward);
     }
   } else {
     s = readInput(p);

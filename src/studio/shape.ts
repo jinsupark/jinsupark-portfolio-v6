@@ -61,6 +61,25 @@ function boxed(pts: P[]): Vertex[] {
   return pts.map((p) => corner((p.x - x0) / sx, (p.y - y0) / sy));
 }
 
+// A polygon's or star's width over its height when its sides are equal (an
+// equilateral triangle, a regular hexagon); null for shapes with no natural
+// proportion.
+export function aspectOf(s: ShapeDoc): number | null {
+  if (s.kind !== 'polygon' && s.kind !== 'star') return null;
+  const n = Math.max(3, Math.round(s.kind === 'star' ? s.points : s.sides));
+  const m = s.kind === 'star' ? n * 2 : n;
+  const pts = Array.from({ length: m }, (_, i) => {
+    const a = -Math.PI / 2 + (i / m) * Math.PI * 2;
+    const r = s.kind === 'star' && i % 2 ? s.inner : 1;
+    return { x: Math.cos(a) * r, y: Math.sin(a) * r };
+  });
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  return (
+    (Math.max(...xs) - Math.min(...xs)) / (Math.max(...ys) - Math.min(...ys))
+  );
+}
+
 export function verticesOf(s: ShapeDoc, w: number, h: number): Vertex[] {
   switch (s.kind) {
     case 'path':

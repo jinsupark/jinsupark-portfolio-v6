@@ -19,7 +19,6 @@ import { defaultsOf, fit } from '@/lab/controls';
 import { newShape, type ShapeDoc } from './shape';
 import { FilterList, ShadowList, ShapeSection, StrokeList } from './Appearance';
 import {
-  BLEND_MODES,
   fillsOf,
   filtersOf,
   outlineOf,
@@ -30,7 +29,8 @@ import {
   type GroupDoc,
   type LayerDoc,
 } from './document';
-import FillList from './Fills';
+import FillList, { AddMenu } from './Fills';
+import { blendOptions } from './tools';
 import type { LayerType } from './layer';
 import {
   combineSchema,
@@ -227,10 +227,7 @@ function BlendingSection({
           value={blend}
           options={[
             ...(blend ? [] : [{ value: '', label: 'mixed' }]),
-            ...BLEND_MODES.map((m) => ({
-              value: m,
-              label: m.replace('-', ' '),
-            })),
+            ...blendOptions,
           ]}
           onChange={(v) => onPatch({ blend: v as LayerDoc['blend'] })}
         />
@@ -284,26 +281,22 @@ export function SelectionInspector({
             >
               <Contrast size={13} />
             </IconButton>
-            <label
+            <AddMenu
               title="Combine shapes"
-              className="relative flex h-6 cursor-pointer items-center gap-0.5 rounded-md px-1 text-neutral-500 hover:bg-black/5 hover:text-neutral-900"
-            >
-              <SquaresUnite size={13} />
-              <ChevronDown size={10} />
-              <select
-                value=""
-                onChange={(e) => e.target.value && onBoolean(e.target.value)}
-                className="absolute inset-0 cursor-pointer opacity-0"
-              >
-                <option value="" disabled hidden>
-                  Combine shapes…
-                </option>
-                <option value="union">Union</option>
-                <option value="subtract">Subtract</option>
-                <option value="intersect">Intersect</option>
-                <option value="exclude">Exclude</option>
-              </select>
-            </label>
+              icon={
+                <>
+                  <SquaresUnite size={13} />
+                  <ChevronDown size={10} />
+                </>
+              }
+              options={[
+                { value: 'union', label: 'Union' },
+                { value: 'subtract', label: 'Subtract' },
+                { value: 'intersect', label: 'Intersect' },
+                { value: 'exclude', label: 'Exclude' },
+              ]}
+              onPick={(v) => onBoolean(v)}
+            />
           </>
         }
       />

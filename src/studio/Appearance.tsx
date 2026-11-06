@@ -15,12 +15,12 @@ import {
   SunMoon,
   type LucideIcon,
 } from 'lucide-react';
-import { useState } from 'react';
 import { defaultsOf, fit } from '@/lab/controls';
 import {
   layerId,
   newFilter,
   newOutline,
+  isVideo,
   newShadow,
   newStroke,
   type ExportDoc,
@@ -39,7 +39,7 @@ import {
   strokeSchema,
   STROKES,
 } from './studioSchemas';
-import { blendOptions, popoverAt } from './tools';
+import { blendOptions, usePopovers } from './tools';
 import {
   IconButton,
   Labeled,
@@ -51,8 +51,6 @@ import {
   SelectField,
   SortableList,
 } from './ui';
-
-type At = { id: string; top: number; left: number };
 
 const strokeOptions = Object.entries(STROKES).map(([value, s]) => ({
   value,
@@ -109,8 +107,7 @@ export function StrokeList({
   onStrokes: (next: StrokeDoc[]) => void;
   types: Record<string, LayerType>;
 }) {
-  const [open, setOpen] = useState<At | null>(null);
-  const current = open && strokes.find((s) => s.id === open.id);
+  const { opens, openAt, close, toggle } = usePopovers();
   const patch = (id: string, p: Partial<StrokeDoc>) =>
     onStrokes(patchIn(strokes, id, p));
   return (
@@ -124,7 +121,7 @@ export function StrokeList({
           onPick={(type, el) => {
             const s = newStroke(type);
             onStrokes([...strokes, s]);
-            setOpen({ id: s.id, ...popoverAt(el) });
+            openAt(s.id, el);
           }}
         />
       }
@@ -133,15 +130,11 @@ export function StrokeList({
         <SortableList
           items={strokes}
           onItems={onStrokes}
-          active={open?.id}
+          active={opens.map((o) => o.id)}
           row={(s) => (
             <>
               <button
-                onClick={(e) =>
-                  open?.id === s.id
-                    ? setOpen(null)
-                    : setOpen({ id: s.id, ...popoverAt(e.currentTarget) })
-                }
+                onClick={(e) => toggle(s.id, e.currentTarget)}
                 className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${s.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
               >
                 <Swatch f={s.fills.at(-1)} />
@@ -175,64 +168,69 @@ export function StrokeList({
           )}
         />
       )}
-      {open && current && (
-        <Popover
-          key={current.id}
-          title={STROKES[current.type]?.label ?? 'Border'}
-          at={open}
-          onClose={() => setOpen(null)}
-        >
-          <div className="space-y-1.5 border-b border-black/6 p-3">
-            <Labeled label="border">
-              <SelectField
-                value={current.type}
-                options={strokeOptions}
-                onChange={(type) => {
-                  const fresh = newStroke(type);
-                  // Fibres start from their own default amount.
-                  patch(current.id, {
-                    type,
-                    ...(type === 'fibres' &&
-                      !(current.fibers > 0) && { fibers: fresh.fibers }),
-                  });
-                }}
+      {opens.map((open) => {
+        const current = strokes.find((x) => x.id === open.id);
+        return (
+          current && (
+            <Popover
+              key={current.id}
+              title={STROKES[current.type]?.label ?? 'Border'}
+              at={open}
+              onClose={() => close(open.id)}
+            >
+              <div className="space-y-1.5 border-b border-black/6 p-3">
+                <Labeled label="border">
+                  <SelectField
+                    value={current.type}
+                    options={strokeOptions}
+                    onChange={(type) => {
+                      const fresh = newStroke(type);
+                      // Fibres start from their own default amount.
+                      patch(current.id, {
+                        type,
+                        ...(type === 'fibres' &&
+                          !(current.fibers > 0) && { fibers: fresh.fibers }),
+                      });
+                    }}
+                  />
+                </Labeled>
+                <Rows
+                  schema={{ ...strokeSchema, ...STROKES[current.type]?.schema }}
+                  values={{ sides: 'all', ...current }}
+                  onChange={(k, v) => patch(current.id, { [k]: v })}
+                />
+                <Labeled label="opacity">
+                  <NumberField
+                    value={current.opacity}
+                    onChange={(opacity) => patch(current.id, { opacity })}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    factor={100}
+                    suffix="%"
+                  />
+                </Labeled>
+                <Labeled label="blend">
+                  <SelectField
+                    value={current.blend}
+                    options={blendOptions}
+                    onChange={(v) =>
+                      patch(current.id, { blend: v as StrokeDoc['blend'] })
+                    }
+                  />
+                </Labeled>
+              </div>
+              <FillList
+                fills={current.fills}
+                onFills={(fills) => patch(current.id, { fills })}
+                types={types}
+                title="Paint"
+                id="insp:StrokePaint"
               />
-            </Labeled>
-            <Rows
-              schema={{ ...strokeSchema, ...STROKES[current.type]?.schema }}
-              values={{ sides: 'all', ...current }}
-              onChange={(k, v) => patch(current.id, { [k]: v })}
-            />
-            <Labeled label="opacity">
-              <NumberField
-                value={current.opacity}
-                onChange={(opacity) => patch(current.id, { opacity })}
-                min={0}
-                max={1}
-                step={0.01}
-                factor={100}
-                suffix="%"
-              />
-            </Labeled>
-            <Labeled label="blend">
-              <SelectField
-                value={current.blend}
-                options={blendOptions}
-                onChange={(v) =>
-                  patch(current.id, { blend: v as StrokeDoc['blend'] })
-                }
-              />
-            </Labeled>
-          </div>
-          <FillList
-            fills={current.fills}
-            onFills={(fills) => patch(current.id, { fills })}
-            types={types}
-            title="Paint"
-            id="insp:StrokePaint"
-          />
-        </Popover>
-      )}
+            </Popover>
+          )
+        );
+      })}
     </Section>
   );
 }
@@ -245,8 +243,7 @@ export function ShadowList({
   shadows: ShadowDoc[];
   onShadows: (next: ShadowDoc[]) => void;
 }) {
-  const [open, setOpen] = useState<At | null>(null);
-  const current = open && shadows.find((s) => s.id === open.id);
+  const { opens, close, toggle } = usePopovers();
   const patch = (id: string, p: Partial<ShadowDoc>) =>
     onShadows(patchIn(shadows, id, p));
   return (
@@ -266,15 +263,11 @@ export function ShadowList({
         <SortableList
           items={shadows}
           onItems={onShadows}
-          active={open?.id}
+          active={opens.map((o) => o.id)}
           row={(s) => (
             <>
               <button
-                onClick={(e) =>
-                  open?.id === s.id
-                    ? setOpen(null)
-                    : setOpen({ id: s.id, ...popoverAt(e.currentTarget) })
-                }
+                onClick={(e) => toggle(s.id, e.currentTarget)}
                 className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${s.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
               >
                 <span
@@ -306,22 +299,27 @@ export function ShadowList({
           )}
         />
       )}
-      {open && current && (
-        <Popover
-          key={current.id}
-          title="Drop shadow"
-          at={open}
-          onClose={() => setOpen(null)}
-        >
-          <div className="space-y-1.5 p-3">
-            <Rows
-              schema={shadowSchema}
-              values={current}
-              onChange={(k, v) => patch(current.id, { [k]: v })}
-            />
-          </div>
-        </Popover>
-      )}
+      {opens.map((open) => {
+        const current = shadows.find((x) => x.id === open.id);
+        return (
+          current && (
+            <Popover
+              key={current.id}
+              title="Drop shadow"
+              at={open}
+              onClose={() => close(open.id)}
+            >
+              <div className="space-y-1.5 p-3">
+                <Rows
+                  schema={shadowSchema}
+                  values={current}
+                  onChange={(k, v) => patch(current.id, { [k]: v })}
+                />
+              </div>
+            </Popover>
+          )
+        );
+      })}
     </Section>
   );
 }
@@ -351,8 +349,7 @@ export function FilterList({
   filters: FilterDoc[];
   onFilters: (next: FilterDoc[]) => void;
 }) {
-  const [open, setOpen] = useState<At | null>(null);
-  const current = open && filters.find((f) => f.id === open.id);
+  const { opens, close, toggle } = usePopovers();
   const patch = (id: string, p: Partial<FilterDoc>) =>
     onFilters(patchIn(filters, id, p));
   const valuesOf = (f: FilterDoc) => {
@@ -380,7 +377,7 @@ export function FilterList({
         <SortableList
           items={filters}
           onItems={onFilters}
-          active={open?.id}
+          active={opens.map((o) => o.id)}
           row={(f) => {
             const def = FILTERS[f.type];
             const Icon = FILTER_ICONS[f.type] ?? SlidersHorizontal;
@@ -390,11 +387,7 @@ export function FilterList({
             return (
               <>
                 <button
-                  onClick={(e) =>
-                    open?.id === f.id
-                      ? setOpen(null)
-                      : setOpen({ id: f.id, ...popoverAt(e.currentTarget) })
-                  }
+                  onClick={(e) => toggle(f.id, e.currentTarget)}
                   className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${f.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
                 >
                   <Icon
@@ -435,51 +428,56 @@ export function FilterList({
           }}
         />
       )}
-      {open && current && (
-        <Popover
-          key={current.id}
-          title={FILTERS[current.type]?.label ?? current.type}
-          at={open}
-          onClose={() => setOpen(null)}
-        >
-          <div className="space-y-1.5 p-3">
-            <Labeled label="filter">
-              <SelectField
-                value={current.type}
-                options={filterOptions}
-                onChange={(type) =>
-                  patch(current.id, {
-                    type,
-                    values: defaultsOf(FILTERS[type].schema),
-                  })
-                }
-              />
-            </Labeled>
-            <Row
-              name="input"
-              control={filterInputSchema}
-              value={current.input}
-              onChange={(input) =>
-                patch(current.id, { input: input as FilterDoc['input'] })
-              }
-            />
-            <Rows
-              schema={FILTERS[current.type]?.schema ?? {}}
-              values={valuesOf(current)}
-              onChange={(k, x) =>
-                patch(current.id, {
-                  values: { ...valuesOf(current), [k]: x },
-                })
-              }
-            />
-            {current.input === 'background' && (
-              <p className="text-neutral-400">
-                Works on the artwork behind this layer, inside its shape.
-              </p>
-            )}
-          </div>
-        </Popover>
-      )}
+      {opens.map((open) => {
+        const current = filters.find((x) => x.id === open.id);
+        return (
+          current && (
+            <Popover
+              key={current.id}
+              title={FILTERS[current.type]?.label ?? current.type}
+              at={open}
+              onClose={() => close(open.id)}
+            >
+              <div className="space-y-1.5 p-3">
+                <Labeled label="filter">
+                  <SelectField
+                    value={current.type}
+                    options={filterOptions}
+                    onChange={(type) =>
+                      patch(current.id, {
+                        type,
+                        values: defaultsOf(FILTERS[type].schema),
+                      })
+                    }
+                  />
+                </Labeled>
+                <Row
+                  name="input"
+                  control={filterInputSchema}
+                  value={current.input}
+                  onChange={(input) =>
+                    patch(current.id, { input: input as FilterDoc['input'] })
+                  }
+                />
+                <Rows
+                  schema={FILTERS[current.type]?.schema ?? {}}
+                  values={valuesOf(current)}
+                  onChange={(k, x) =>
+                    patch(current.id, {
+                      values: { ...valuesOf(current), [k]: x },
+                    })
+                  }
+                />
+                {current.input === 'background' && (
+                  <p className="text-neutral-400">
+                    Works on the artwork behind this layer, inside its shape.
+                  </p>
+                )}
+              </div>
+            </Popover>
+          )
+        );
+      })}
     </Section>
   );
 }
@@ -491,6 +489,8 @@ const SCALES = [0.5, 1, 2, 3, 4].map((s) => ({
 const FORMATS = [
   { value: 'png', label: 'PNG' },
   { value: 'jpg', label: 'JPG' },
+  { value: 'mp4', label: 'MP4' },
+  { value: 'webm', label: 'WebM' },
 ];
 
 // Export presets, like Paper's: scale and format per row, one button for all.
@@ -543,6 +543,17 @@ export function ExportSection({
             onChange={(v) => patch(e.id, { format: v as ExportDoc['format'] })}
             className="min-w-0 flex-1"
           />
+          {isVideo(e) && (
+            <NumberField
+              value={e.duration ?? 5}
+              onChange={(duration) => patch(e.id, { duration })}
+              min={1}
+              max={120}
+              step={1}
+              suffix="s"
+              className="w-14 shrink-0"
+            />
+          )}
           <Remove
             what="export size"
             onClick={() => onExports(exports.filter((x) => x.id !== e.id))}
@@ -582,8 +593,7 @@ export function ShapeSection({
   onOutline: (next: OutlineDoc[]) => void;
   children?: React.ReactNode;
 }) {
-  const [open, setOpen] = useState<At | null>(null);
-  const current = open && outline.find((o) => o.id === open.id);
+  const { opens, isOpen, openAt, close, toggle } = usePopovers();
   const patch = (id: string, p: Partial<OutlineDoc>) =>
     onOutline(patchIn(outline, id, p));
   const valuesOf = (o: OutlineDoc) => {
@@ -601,7 +611,7 @@ export function ShapeSection({
           onPick={(type, el) => {
             const o = newOutline(type, defaultsOf(OUTLINES[type].schema));
             onOutline([...outline, o]);
-            setOpen({ id: o.id, ...popoverAt(el) });
+            openAt(o.id, el);
           }}
         />
       }
@@ -611,7 +621,7 @@ export function ShapeSection({
         <SortableList
           items={outline}
           onItems={onOutline}
-          active={open?.id}
+          active={opens.map((o) => o.id)}
           row={(o) => {
             const def = OUTLINES[o.type];
             const Icon = OUTLINE_ICONS[o.type] ?? SlidersHorizontal;
@@ -644,12 +654,8 @@ export function ShapeSection({
                 {def && Object.keys(def.schema).length > 1 ? (
                   <IconButton
                     title={`${def.label} settings`}
-                    active={open?.id === o.id}
-                    onClick={(e) =>
-                      open?.id === o.id
-                        ? setOpen(null)
-                        : setOpen({ id: o.id, ...popoverAt(e.currentTarget) })
-                    }
+                    active={isOpen(o.id)}
+                    onClick={(e) => toggle(o.id, e.currentTarget)}
                     className="size-5!"
                   >
                     <SlidersHorizontal size={12} />
@@ -673,24 +679,31 @@ export function ShapeSection({
           }}
         />
       )}
-      {open && current && (
-        <Popover
-          key={current.id}
-          title={OUTLINES[current.type]?.label ?? current.type}
-          at={open}
-          onClose={() => setOpen(null)}
-        >
-          <div className="space-y-1.5 p-3">
-            <Rows
-              schema={OUTLINES[current.type]?.schema ?? {}}
-              values={valuesOf(current)}
-              onChange={(k, x) =>
-                patch(current.id, { values: { ...valuesOf(current), [k]: x } })
-              }
-            />
-          </div>
-        </Popover>
-      )}
+      {opens.map((open) => {
+        const current = outline.find((x) => x.id === open.id);
+        return (
+          current && (
+            <Popover
+              key={current.id}
+              title={OUTLINES[current.type]?.label ?? current.type}
+              at={open}
+              onClose={() => close(open.id)}
+            >
+              <div className="space-y-1.5 p-3">
+                <Rows
+                  schema={OUTLINES[current.type]?.schema ?? {}}
+                  values={valuesOf(current)}
+                  onChange={(k, x) =>
+                    patch(current.id, {
+                      values: { ...valuesOf(current), [k]: x },
+                    })
+                  }
+                />
+              </div>
+            </Popover>
+          )
+        );
+      })}
     </Section>
   );
 }

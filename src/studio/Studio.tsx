@@ -1,5 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Pause, Play } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { defaultsOf, fit } from '@/lab/controls';
 import { WORKS, workOf } from '@/works';
@@ -58,14 +58,7 @@ import {
   strokeSchema,
 } from './studioSchemas';
 import Toolbar from './Toolbar';
-import {
-  hitLayer,
-  TOOL_HINTS,
-  TOOLS,
-  typing,
-  type Brush,
-  type Tool,
-} from './tools';
+import { hitLayer, TOOLS, typing, type Brush, type Tool } from './tools';
 import {
   ControlGroups,
   Labeled,
@@ -74,6 +67,7 @@ import {
   ResizeHandle,
   SelectField,
   Section,
+  Tip,
 } from './ui';
 import './studio.css';
 
@@ -177,6 +171,13 @@ export default function Studio({ work }: { work?: string }) {
         : [...s.filter((id) => !ids.includes(id)), ...ids];
     });
   const [status, setStatus] = useState('');
+  // The canvas's zoom, shown in the page header (click to fit), and whether
+  // the artwork animates (the Animation section; remembered).
+  const [zoom, setZoom] = useState(1);
+  const [fitAsk, setFitAsk] = useState(0);
+  const [playing, setPlaying] = useState(
+    () => localStorage.getItem('studio:play') !== '0',
+  );
   // The sidebars' widths, dragged at their inner edges and remembered.
   const [widths, setWidths] = useState<{ left: number; right: number }>(() => {
     try {
@@ -752,6 +753,9 @@ export default function Studio({ work }: { work?: string }) {
         <ArtworkPlayer
           doc={doc}
           navigable
+          playing={playing}
+          onZoom={setZoom}
+          zoomTo={fitAsk}
           surround={doc.surround ?? '#eeeeee'}
           className="absolute! inset-0"
           onCompositor={(c) => (comp.current = c)}
@@ -801,12 +805,9 @@ export default function Studio({ work }: { work?: string }) {
             />
           )}
         </ArtworkPlayer>
-        <p className="pointer-events-none absolute inset-x-0 bottom-0 flex h-8 items-center justify-center text-neutral-700/80">
-          {TOOL_HINTS[tool]}
-        </p>
       </main>
 
-      <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-black/8">
+      <aside className="relative flex min-h-0 flex-col overflow-y-auto border-l border-black/8">
         {tool === 'smear' && (
           <ControlGroups
             id="studio"
@@ -880,8 +881,37 @@ export default function Studio({ work }: { work?: string }) {
           <>
             <PanelHeader
               title="Page"
-              meta={`${ASPECTS.find((a) => a.size.w === size.w && a.size.h === size.h)?.label ?? 'Custom'} · ${size.w} × ${size.h} · ${doc.layers.length} layers`}
+              meta={
+                <>
+                  {ASPECTS.find(
+                    (a) => a.size.w === size.w && a.size.h === size.h,
+                  )?.label ?? 'Custom'}{' '}
+                  · {size.w} × {size.h} · {doc.layers.length} layers ·{' '}
+                  <Tip label="Fit (⇧1)">
+                    <button
+                      onClick={() => setFitAsk((n) => n + 1)}
+                      className="rounded px-0.5 tabular-nums hover:bg-black/5 hover:text-neutral-900"
+                    >
+                      {Math.round(zoom * 100)}%
+                    </button>
+                  </Tip>
+                </>
+              }
             />
+            <Section id="studio:animation" title="Animation">
+              <Labeled label={playing ? 'playing' : 'paused'}>
+                <button
+                  onClick={() => {
+                    localStorage.setItem('studio:play', playing ? '0' : '1');
+                    setPlaying(!playing);
+                  }}
+                  className="flex h-7 items-center justify-center gap-1.5 rounded-md border border-black/10 bg-white font-medium text-neutral-800 hover:bg-neutral-50"
+                >
+                  {playing ? <Pause size={12} /> : <Play size={12} />}
+                  {playing ? 'Pause' : 'Play'}
+                </button>
+              </Labeled>
+            </Section>
             <Section id="studio:canvas" title="Canvas">
               <Labeled label="aspect">
                 <SelectField

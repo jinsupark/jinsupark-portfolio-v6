@@ -1,4 +1,3 @@
-import { Pause, Play } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Compositor } from './compositor';
 import { sizeOf, type Artwork } from './document';
@@ -41,6 +40,8 @@ export default function ArtworkPlayer({
   onCompositor,
   onBackdrop,
   navigable = false,
+  onZoom,
+  zoomTo,
   playing = true,
   surround = '#eeeeee',
   children,
@@ -50,6 +51,10 @@ export default function ArtworkPlayer({
   onCompositor?: (c: Compositor | null) => void;
   onBackdrop?: () => void;
   navigable?: boolean;
+  // The zoom (1 is one design unit per CSS pixel), as it changes.
+  onZoom?: (zoom: number) => void;
+  // Bumped to ask for a fit (the zoom readout's click).
+  zoomTo?: number;
   // Off: the artwork holds still and renders only when something changes.
   playing?: boolean;
   surround?: string;
@@ -63,14 +68,9 @@ export default function ArtworkPlayer({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [spaceHeld, setSpaceHeld] = useState(false);
-  // In the studio the play/pause button decides, and is remembered.
-  const [studioPlay, setStudioPlay] = useState(
-    () => localStorage.getItem('studio:play') !== '0',
-  );
-  const live = navigable ? studioPlay : playing;
-  const play = useRef(live);
+  const play = useRef(playing);
   useEffect(() => {
-    play.current = live;
+    play.current = playing;
   });
   const onComp = useRef(onCompositor);
   useEffect(() => {
@@ -186,6 +186,19 @@ export default function ArtworkPlayer({
     setZoom(1);
     setPan({ x: 0, y: 0 });
   };
+  const report = useRef(onZoom);
+  useEffect(() => {
+    report.current = onZoom;
+  });
+  useEffect(() => {
+    if (scale) report.current?.(scale);
+  }, [scale]);
+  const [fitAsked, setFitAsked] = useState(zoomTo);
+  if (zoomTo !== fitAsked) {
+    setFitAsked(zoomTo);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }
 
   // Wheel: pinch (ctrlKey) or ⌘ zooms at the pointer, otherwise pans. Bound
   // by hand so it can be non-passive and stop the page scrolling.
@@ -310,27 +323,6 @@ export default function ArtworkPlayer({
       >
         {children}
       </div>
-      {navigable && (
-        <button
-          title={studioPlay ? 'Pause animation' : 'Play animation'}
-          onClick={() => {
-            localStorage.setItem('studio:play', studioPlay ? '0' : '1');
-            setStudioPlay(!studioPlay);
-          }}
-          className="absolute right-14 bottom-2 grid size-[22px] place-items-center rounded-md border border-black/10 bg-white/90 text-neutral-600 hover:bg-white"
-        >
-          {studioPlay ? <Pause size={11} /> : <Play size={11} />}
-        </button>
-      )}
-      {navigable && (
-        <button
-          title="Fit (⇧1)"
-          onClick={fitView}
-          className="absolute right-2 bottom-2 rounded-md border border-black/10 bg-white/90 px-1.5 py-0.5 text-[10px] text-neutral-600 tabular-nums hover:bg-white"
-        >
-          {Math.round(scale * 100)}%
-        </button>
-      )}
     </div>
   );
 }

@@ -144,7 +144,7 @@ export default function FrameHandles({
         drag.current = null;
         setSizing(null);
       }}
-      className="absolute cursor-move outline outline-1 outline-sky-500"
+      className="pointer-events-none absolute outline outline-1 outline-sky-500"
       style={{
         left: pct(frame.x, size.w),
         top: pct(frame.y, size.h),
@@ -165,7 +165,7 @@ export default function FrameHandles({
           <span
             key={`rot-${g}`}
             onPointerDown={(e) => down(e, 'rot')}
-            className="absolute size-4"
+            className="pointer-events-auto absolute size-4"
             style={{
               left: g.includes('w') ? 0 : '100%',
               top: g.includes('n') ? 0 : '100%',
@@ -178,7 +178,7 @@ export default function FrameHandles({
         <span
           key={g}
           onPointerDown={(e) => down(e, g)}
-          className="absolute size-2.5 -translate-1/2 rounded-[2px] border border-sky-500 bg-white"
+          className="pointer-events-auto absolute size-2.5 -translate-1/2 rounded-[2px] border border-sky-500 bg-white"
           style={{
             left: g.includes('w') ? 0 : '100%',
             top: g.includes('n') ? 0 : '100%',

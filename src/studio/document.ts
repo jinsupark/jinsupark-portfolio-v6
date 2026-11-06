@@ -266,7 +266,15 @@ export function resizeArtwork(d: Artwork, size: Size): Artwork {
   };
 }
 
-export type ExportDoc = { id: string; scale: number; format: 'png' | 'jpg' };
+export type ExportDoc = {
+  id: string;
+  scale: number;
+  format: 'png' | 'jpg' | 'mp4' | 'webm';
+  // Video only: how long to record, in seconds.
+  duration?: number;
+};
+export const isVideo = (e: ExportDoc) =>
+  e.format === 'mp4' || e.format === 'webm';
 export const DEFAULT_EXPORTS: ExportDoc[] = [
   { id: 'default', scale: 2, format: 'png' },
 ];

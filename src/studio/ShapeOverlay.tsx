@@ -7,6 +7,7 @@ import {
   fromStroke,
   nearestOnPath,
   newShape,
+  aspectOf,
   refit,
   smear,
   smoothPath,
@@ -71,7 +72,9 @@ type Gesture =
       base: string[];
     }
   // A layer pressed and dragged in one go.
-  | { kind: 'grab'; id: string; at: P; frame: Frame };
+  | { kind: 'grab'; id: string; at: P; frame: Frame }
+  // The whole selection, dragged from any layer in it.
+  | { kind: 'grabMany'; at: P; frames: [string, Frame][] };
 
 // A layer that covers the whole canvas: a background. Dragging from one draws
 // a selection box rather than moving it.
@@ -97,6 +100,27 @@ function extentOf(f: Frame) {
 // Everything drawn on the artwork that isn't the frame box: shape creation,
 // picking, and the selected shape's points. One SVG in design units over the
 // artwork, so it holds at any display size.
+// The box a drawing drag makes. A polygon or star keeps equal sides: the
+// drag sets its width and its height follows, growing the way the drag went.
+function drawBox(g: { at: P; to: P }, shape: ShapeDoc) {
+  const dx = g.to.x - g.at.x;
+  const dy = g.to.y - g.at.y;
+  const aspect = aspectOf(shape);
+  let w = Math.abs(dx);
+  let h = Math.abs(dy);
+  if (aspect) {
+    // Whichever way the drag went further decides the size.
+    if (w / aspect >= h) h = w / aspect;
+    else w = h * aspect;
+  }
+  return {
+    x: dx < 0 ? g.at.x - w : g.at.x,
+    y: dy < 0 ? g.at.y - h : g.at.y,
+    w,
+    h,
+  };
+}
+
 export default function ShapeOverlay({
   tool,
   layers,
@@ -239,6 +263,18 @@ export default function ShapeOverlay({
     svg.current!.setPointerCapture(e.pointerId);
     if (tool === 'select') {
       const hit = hitLayer(layers, p);
+      // Pressing a selected layer drags the whole selection (a selected
+      // background too, which otherwise starts a box).
+      if (hit && selection.includes(hit.id) && !e.shiftKey && !e.altKey) {
+        setGesture({
+          kind: 'grabMany',
+          at: p,
+          frames: layers
+            .filter((l) => selection.includes(l.id) && !l.locked)
+            .map((l) => [l.id, l.frame]),
+        });
+        return;
+      }
       if (hit && !isBackground(hit, size)) {
         if (e.altKey && onDuplicate) {
           const id = onDuplicate(hit.id);
@@ -352,6 +388,13 @@ export default function ShapeOverlay({
         );
       return;
     }
+    if (g.kind === 'grabMany') {
+      const dx = Math.round(p.x - g.at.x);
+      const dy = Math.round(p.y - g.at.y);
+      for (const [id, f] of g.frames)
+        onPatch(id, { frame: { ...f, x: f.x + dx, y: f.y + dy } });
+      return;
+    }
     if (g.kind === 'grab') {
       onPatch(g.id, {
         frame: {
@@ -449,18 +492,15 @@ export default function ShapeOverlay({
       return;
     }
     if (g.kind === 'draw') {
-      let x0 = Math.min(g.at.x, g.to.x);
-      let y0 = Math.min(g.at.y, g.to.y);
-      let w = Math.abs(g.to.x - g.at.x);
-      let h = Math.abs(g.to.y - g.at.y);
+      const shape = newShape(DRAW_TOOLS[tool], tool === 'triangle' ? 3 : 6);
+      let { x: x0, y: y0, w, h } = drawBox(g, shape);
       // A click rather than a drag drops a default-sized shape there.
       if (w < 6 || h < 6) {
-        w = h = 240;
+        w = 240;
+        h = 240 / (aspectOf(shape) ?? 1);
         x0 = g.at.x - w / 2;
         y0 = g.at.y - h / 2;
       }
-      const kind = DRAW_TOOLS[tool];
-      const shape = newShape(kind, tool === 'triangle' ? 3 : 6);
       onCreate(tool, { x: x0, y: y0, w, h, rot: 0 }, shape);
     } else if (g.kind === 'pen') {
       const r = fromStroke(g.pts);
@@ -514,13 +554,9 @@ export default function ShapeOverlay({
   const preview = (() => {
     if (g?.kind === 'pen') return pathTo(g.pts).replace(/Z$/, '');
     if (g?.kind !== 'draw') return '';
-    const x0 = Math.min(g.at.x, g.to.x);
-    const y0 = Math.min(g.at.y, g.to.y);
-    const w = Math.abs(g.to.x - g.at.x);
-    const h = Math.abs(g.to.y - g.at.y);
+    const s = newShape(DRAW_TOOLS[tool], tool === 'triangle' ? 3 : 6);
+    const { x: x0, y: y0, w, h } = drawBox(g, s);
     if (w < 1 || h < 1) return '';
-    const kind = DRAW_TOOLS[tool];
-    const s = newShape(kind, tool === 'triangle' ? 3 : 6);
     return pathTo(
       flatten(verticesOf(s, w, h), w, h, 200).map((q) => ({
         x: q.x + x0,

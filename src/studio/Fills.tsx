@@ -4,7 +4,7 @@ import { defaultsOf, fit } from '@/lab/controls';
 import { newFill, type FillDoc } from './document';
 import type { LayerType } from './layer';
 import { fillSpaceSchema } from './studioSchemas';
-import { blendOptions, popoverAt, resetGroup } from './tools';
+import { blendOptions, resetGroup, usePopovers } from './tools';
 import {
   ControlGroups,
   IconButton,
@@ -14,8 +14,10 @@ import {
   Row,
   Section,
   SelectField,
+  Menu,
   SortableList,
   Tip,
+  type MenuOption,
 } from './ui';
 
 const randomSeed = () => 1 + Math.floor(Math.random() * 999);
@@ -48,41 +50,49 @@ export function Swatch({ f }: { f?: FillDoc }) {
   );
 }
 
-// A + that opens a native menu of choices.
+// A + (or another icon) that opens a menu of choices.
 export function AddMenu({
   title,
   options,
   onPick,
+  icon,
 }: {
   title: string;
-  options: { value: string; label: string }[];
+  options: MenuOption[];
   onPick: (value: string, el: HTMLElement) => void;
+  icon?: React.ReactNode;
 }) {
+  const [at, setAt] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
   return (
-    <Tip label={title}>
-      <label
-        aria-label={title}
-        className="relative grid size-6 cursor-pointer place-items-center rounded-md text-neutral-500 hover:bg-black/5 hover:text-neutral-900"
-      >
-        <Plus size={13} />
-        <select
-          value=""
-          onChange={(e) =>
-            e.target.value && onPick(e.target.value, e.currentTarget)
+    <>
+      <Tip label={title}>
+        <button
+          aria-label={title}
+          onClick={(e) =>
+            setAt(
+              at
+                ? null
+                : {
+                    rect: e.currentTarget.getBoundingClientRect(),
+                    el: e.currentTarget,
+                  },
+            )
           }
-          className="absolute inset-0 cursor-pointer opacity-0"
+          className={`flex h-6 min-w-6 shrink-0 items-center justify-center gap-0.5 rounded-md px-1 text-neutral-500 outline-none hover:bg-black/5 hover:text-neutral-900 ${at ? 'bg-black/5 text-neutral-900' : ''}`}
         >
-          <option value="" disabled hidden>
-            {title}…
-          </option>
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </label>
-    </Tip>
+          {icon ?? <Plus size={13} />}
+        </button>
+      </Tip>
+      {at && (
+        <Menu
+          anchor={at.rect}
+          trigger={at.el}
+          options={options}
+          onPick={(v) => onPick(v, at.el)}
+          onClose={() => setAt(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -115,15 +125,10 @@ export default function FillList({
     to: LayerType,
   ) => void;
 }) {
-  const [open, setOpen] = useState<{
-    id: string;
-    top: number;
-    left: number;
-  } | null>(null);
+  const { opens, openAt, close, toggle } = usePopovers();
   const labelOf = (f: FillDoc) => types[f.type]?.label ?? `missing: ${f.type}`;
   const patchFill = (fid: string, p: Partial<FillDoc>) =>
     onFills(fills.map((f) => (f.id === fid ? { ...f, ...p } : f)));
-  const current = open && fills.find((f) => f.id === open.id);
 
   return (
     <Section
@@ -137,7 +142,7 @@ export default function FillList({
             const t = types[type];
             const f = newFill(type, { ...t.initial() }, t.version);
             onFills([...fills, f]);
-            setOpen({ id: f.id, ...popoverAt(el) });
+            openAt(f.id, el);
           }}
         />
       }
@@ -145,16 +150,12 @@ export default function FillList({
       <SortableList
         items={fills}
         onItems={onFills}
-        active={open?.id}
+        active={opens.map((o) => o.id)}
         empty="No fills."
         row={(f) => (
           <>
             <button
-              onClick={(e) =>
-                open?.id === f.id
-                  ? setOpen(null)
-                  : setOpen({ id: f.id, ...popoverAt(e.currentTarget) })
-              }
+              onClick={(e) => toggle(f.id, e.currentTarget)}
               className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${f.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
             >
               <Swatch f={f} />
@@ -188,17 +189,22 @@ export default function FillList({
         )}
       />
 
-      {open && current && (
-        <FillPopover
-          key={current.id}
-          fill={current}
-          types={types}
-          at={open}
-          onPatch={(p) => patchFill(current.id, p)}
-          onRetype={onRetype}
-          onClose={() => setOpen(null)}
-        />
-      )}
+      {opens.map((open) => {
+        const current = fills.find((x) => x.id === open.id);
+        return (
+          current && (
+            <FillPopover
+              key={current.id}
+              fill={current}
+              types={types}
+              at={open}
+              onPatch={(p) => patchFill(current.id, p)}
+              onRetype={onRetype}
+              onClose={() => close(open.id)}
+            />
+          )
+        );
+      })}
     </Section>
   );
 }
