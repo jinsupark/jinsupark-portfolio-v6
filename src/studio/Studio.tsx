@@ -237,7 +237,13 @@ export default function Studio({ work }: { work?: string }) {
         ? next.groups?.some((g) => folderKey(g.id) === id)
         : next.layers.some((l) => l.id === id),
     );
-    setSel(kept.length ? kept : next.layers.slice(-1).map((l) => l.id));
+    // Keep the selection (nothing stays nothing, so the page panel stays up);
+    // only fall back to the top layer when undo removed what was selected.
+    setSel(
+      kept.length || !sel.length
+        ? kept
+        : next.layers.slice(-1).map((l) => l.id),
+    );
   };
 
   const group = () => {
