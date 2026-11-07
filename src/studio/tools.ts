@@ -107,7 +107,7 @@ export function hitLayer(layers: LayerDoc[], p: P) {
 
 // Where a popover opened from `el` goes: beside the panel or popover it was
 // opened from, a few pixels off, level with `el` where the screen allows.
-export const POPOVER_W = 264;
+const POPOVER_W = 264;
 export function popoverAt(el: Element, width = POPOVER_W) {
   // Only a popover opened from inside another sits beside it; one opened
   // from the panel replaces whatever was open, so it takes the usual place.
@@ -158,7 +158,7 @@ export function useOnOtherPopover(owner: unknown, close: () => void) {
 
 // Which item of a list has its popover open (several only when they were
 // opened from inside a popover).
-export type At = { id: string; top: number; left: number };
+type At = { id: string; top: number; left: number };
 export function usePopovers() {
   const [opens, setOpens] = useState<At[]>([]);
   const [me] = useState(() => ({}));

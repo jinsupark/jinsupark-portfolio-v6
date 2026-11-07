@@ -71,7 +71,7 @@ export default function ShaderPlayground({ type }: { type: LayerType }) {
 
       <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-black/8">
         <PanelHeader title={type.label} meta="Shader" />
-        <Section id="shader:canvas" title="Canvas">
+        <Section title="Canvas">
           <Labeled label="aspect">
             <SelectField
               value={
@@ -87,7 +87,6 @@ export default function ShaderPlayground({ type }: { type: LayerType }) {
           </Labeled>
         </Section>
         <Section
-          id="shader:settings"
           title="Settings"
           aside={
             <>
@@ -119,7 +118,6 @@ export default function ShaderPlayground({ type }: { type: LayerType }) {
           </p>
         </Section>
         <ControlGroups
-          id={`shader:${type.type}`}
           schema={type.schema}
           values={values}
           onChange={set}

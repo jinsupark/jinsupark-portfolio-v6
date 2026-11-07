@@ -474,39 +474,21 @@ void main() {
   }
 }`;
 
+// The finished artwork onto the screen, with the surround painted wherever the
+// view runs past the artwork.
 export const POST_FRAG = /* glsl */ `
 precision highp float;
 uniform sampler2D uSrc;
-uniform vec2 uRes;
-uniform float uTime;
-uniform float uGrain;
-uniform float uGrainSize;
-uniform float uVignette;
 uniform vec4 uView;
 uniform vec2 uDesign;
 uniform vec3 uSurround;
 in vec2 vUv;
 out vec4 outColor;
 
-float hash(vec2 p) {
-  p = fract(p * vec2(443.897, 441.423));
-  p += dot(p, p.yx + 19.19);
-  return fract((p.x + p.y) * p.x);
-}
-
 void main() {
   vec3 c = texture(uSrc, vUv).rgb;
-  if (uGrain > 0.0) {
-    vec2 cell = floor(vUv * uRes / uGrainSize);
-    float n = hash(cell + fract(uTime * 7.31) * 113.0) - 0.5;
-    c += n * uGrain;
-  }
   // Where this pixel is on the artwork, 0..1; outside it is the surround.
   vec2 art = (uView.xy + vec2(vUv.x, 1.0 - vUv.y) * uView.zw) / uDesign;
-  if (uVignette > 0.0) {
-    vec2 d = art - 0.5;
-    c *= 1.0 - uVignette * smoothstep(0.2, 0.8, dot(d, d) * 2.0);
-  }
   bool past = any(lessThan(art, vec2(0.0))) || any(greaterThan(art, vec2(1.0)));
   outColor = vec4(past ? uSurround : clamp(c, 0.0, 1.0), 1.0);
 }`;

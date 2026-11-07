@@ -38,19 +38,6 @@ export type Mask = {
   invert: boolean;
 };
 
-// Applied to the layer's own pixels before it's blended, in this order.
-export type LayerFx = {
-  pixelate: number; // cells across the layer; 0 is off
-  mono: boolean;
-  invert: boolean;
-  posterize: number; // levels per channel; 0 is off
-  threshold: number; // 0 is off
-  dither: boolean; // two-colour ordered dither, `ink` on `paper`
-  ditherScale: number; // design units per dither cell
-  ink: string;
-  paper: string;
-};
-
 // One entry in a layer's fill stack: a pixel-making layer type (`solid`,
 // `grid`, `local/<name>`…) with its values.
 export type FillDoc = {
@@ -66,8 +53,6 @@ export type FillDoc = {
   // Laid out in the shape's frame and moving with it, or across the whole
   // artwork so the shape is a window onto it.
   fillSpace?: 'shape' | 'canvas';
-  // Drafts from when effects were fills: read as a filter's input.
-  input?: 'below' | 'behind';
 };
 
 // A filter changes pixels: the layer's fills (before the shape is cut, so the
@@ -133,24 +118,14 @@ export type LayerDoc = {
   opacity: number;
   blend: BlendMode;
   mask: Mask;
-  // Bottom to top. Absent on layers saved before they existed; `fillsOf`,
-  // `filtersOf`, `strokesOf` and `shadowsOf` read those from older fields.
-  fills?: FillDoc[];
-  filters?: FilterDoc[];
-  strokes?: StrokeDoc[];
-  shadows?: ShadowDoc[];
-  outline?: OutlineDoc[];
-  // Before fills: one pixel-making type, its values and filters.
-  type?: string;
-  version?: number;
-  values?: Record<string, unknown>;
-  fx?: LayerFx;
-  fillSpace?: 'shape' | 'canvas';
+  // Bottom to top, each.
+  fills: FillDoc[];
+  filters: FilterDoc[];
+  strokes: StrokeDoc[];
+  shadows: ShadowDoc[];
+  outline: OutlineDoc[];
   // The outline the fills are cut to. Absent is the whole frame.
   shape?: ShapeDoc;
-  // Older layers' tear, feather, paper core, stroke and shadow, now read
-  // through `outlineOf`, `strokesOf` and `shadowsOf`.
-  edge?: Record<string, unknown>;
   // Booleans with other layers' shapes, checked against `combineSchema`.
   combine?: Record<string, unknown>;
   // The folder this layer sits in, by `GroupDoc` id. A folder's layers are
@@ -214,8 +189,6 @@ export const plainFolder = (g: GroupDoc) =>
   !g.shadows?.some((s) => s.visible) &&
   !g.mask?.source;
 
-export type Post = { grain: number; grainSize: number; vignette: number };
-
 export type Artwork = {
   version: number;
   slug: string;
@@ -225,7 +198,6 @@ export type Artwork = {
   // Bottom to top.
   layers: LayerDoc[];
   groups?: GroupDoc[];
-  post: Post;
   // Export presets: each is the whole artwork at a scale of its design size.
   exports?: ExportDoc[];
   // The studio's background round the artwork (the artwork's own colour is
@@ -418,18 +390,6 @@ export function tidyGroups(d: Artwork): Artwork {
   };
 }
 
-export const NO_FX: LayerFx = {
-  pixelate: 0,
-  mono: false,
-  invert: false,
-  posterize: 0,
-  threshold: 0,
-  dither: false,
-  ditherScale: 2,
-  ink: '#111111',
-  paper: '#f2f0eb',
-};
-
 export const fullFrame = (size: Size = DESIGN): Frame => ({
   x: 0,
   y: 0,
@@ -445,10 +405,30 @@ export const newArtwork = (slug = 'untitled'): Artwork => ({
   about: '',
   background: '#e3e1dc',
   layers: [],
-  post: { grain: 0, grainSize: 1, vignette: 0 },
 });
 
 export const layerId = () => Math.random().toString(36).slice(2, 9);
+
+// A layer with nothing on it yet but `fills`.
+export const newLayer = (
+  name: string,
+  frame: Frame,
+  fills: FillDoc[],
+  id = layerId(),
+): LayerDoc => ({
+  id,
+  name,
+  visible: true,
+  frame,
+  opacity: 1,
+  blend: 'normal',
+  mask: { source: null, mode: 'alpha', invert: false },
+  fills,
+  filters: [],
+  strokes: [],
+  shadows: [],
+  outline: [],
+});
 
 export const newFill = (
   type: string,
@@ -464,11 +444,11 @@ export const newFill = (
   blend: 'normal',
 });
 
-export const solidFill = (color: string, id = layerId()): FillDoc => ({
+const solidFill = (color: string, id = layerId()): FillDoc => ({
   id,
   type: 'solid',
-  version: 1,
-  values: { color, gradient: false, color2: '#fcdbe5', angle: 90 },
+  version: 2,
+  values: { color },
   visible: true,
   opacity: 1,
   blend: 'normal',
@@ -513,184 +493,7 @@ export const newFilter = (
   input: 'layer',
 });
 
-// Defaults of the edge fields older layers used, so they read as they did.
-const OLD_EDGE = {
-  core: 0,
-  fibers: 0.6,
-  coreColor: '#f8f5ee',
-  stroke: 0,
-  strokeAlign: 'center',
-  strokeColor: '#111111',
-  shadow: 0,
-  shadowX: 6,
-  shadowY: 10,
-  shadowBlur: 14,
-  shadowColor: '#1a1712',
-};
-const oldEdge = (l: LayerDoc) =>
-  ({ ...OLD_EDGE, ...l.edge }) as typeof OLD_EDGE & Record<string, unknown>;
-
-function memo<T>(f: (l: LayerDoc) => T) {
-  const cache = new WeakMap<LayerDoc, T>();
-  return (l: LayerDoc): T => {
-    let v = cache.get(l);
-    if (v === undefined) cache.set(l, (v = f(l)));
-    return v;
-  };
-}
-
-const isOldEffect = (f: FillDoc) => f.type.startsWith('fx/');
-
-// The layer's fills. One saved before fills existed has its type as one.
-export const fillsOf = memo((l): FillDoc[] =>
-  l.fills
-    ? l.fills.filter((f) => !isOldEffect(f))
-    : [
-        {
-          id: `${l.id}-fill`,
-          type: l.type ?? 'solid',
-          version: l.version,
-          values: l.values ?? {},
-          visible: true,
-          opacity: 1,
-          blend: 'normal',
-          ...(l.fillSpace && { fillSpace: l.fillSpace }),
-        },
-      ],
-);
-
-// The layer's filters. Older layers' fixed filters become these in the order
-// the old layer pass ran them; drafts from when effects were fills move here.
-export const filtersOf = memo((l): FilterDoc[] => {
-  if (l.filters) return l.filters;
-  if (l.fills)
-    return l.fills.filter(isOldEffect).map((f) => ({
-      id: f.id,
-      type: f.type.slice(3),
-      visible: f.visible,
-      values: f.values,
-      input: f.input === 'behind' ? 'background' : 'layer',
-    }));
-  const fx = { ...NO_FX, ...l.fx };
-  const f = (type: string, values: Record<string, unknown> = {}) => ({
-    id: `${l.id}-${type}`,
-    type,
-    visible: true,
-    values,
-    input: 'layer' as const,
-  });
-  return [
-    ...(fx.pixelate > 0 ? [f('pixelate', { cells: fx.pixelate })] : []),
-    ...(fx.mono ? [f('mono')] : []),
-    ...(fx.invert ? [f('invert')] : []),
-    ...(fx.posterize > 0 ? [f('posterize', { levels: fx.posterize })] : []),
-    ...(fx.threshold > 0 ? [f('threshold', { level: fx.threshold })] : []),
-    ...(fx.dither
-      ? [f('dither', { scale: fx.ditherScale, ink: fx.ink, paper: fx.paper })]
-      : []),
-  ];
-});
-
-// The layer's strokes. An older layer's paper core is an inside stroke with
-// fibres, under its stroke, as the old layer pass drew them.
-export const strokesOf = memo((l): StrokeDoc[] => {
-  // Strokes from before types existed: fibres if they had any.
-  if (l.strokes)
-    return l.strokes.map((s) =>
-      s.type ? s : { ...s, type: s.fibers > 0 ? 'fibres' : 'line' },
-    );
-  const e = oldEdge(l);
-  const out: StrokeDoc[] = [];
-  if (Number(e.core) > 0)
-    out.push({
-      ...newStroke('fibres', `${l.id}-core`),
-      width: Number(e.core),
-      align: 'inside',
-      fibers: Number(e.fibers),
-      fills: [solidFill(String(e.coreColor), `${l.id}-core-fill`)],
-    });
-  if (Number(e.stroke) > 0)
-    out.push({
-      ...newStroke('line', `${l.id}-stroke`),
-      width: Number(e.stroke),
-      align: e.strokeAlign as StrokeDoc['align'],
-      fills: [solidFill(String(e.strokeColor), `${l.id}-stroke-fill`)],
-    });
-  return out;
-});
-
-export const shadowsOf = memo((l): ShadowDoc[] => {
-  if (l.shadows) return l.shadows;
-  const e = oldEdge(l);
-  return Number(e.shadow) > 0
-    ? [
-        {
-          id: `${l.id}-shadow`,
-          visible: true,
-          x: Number(e.shadowX),
-          y: Number(e.shadowY),
-          blur: Number(e.shadowBlur),
-          color: String(e.shadowColor),
-          opacity: Number(e.shadow),
-        },
-      ]
-    : [];
-});
-
-// The layer's outline effects. Older layers kept one tear and one feather in
-// `edge`.
-export const outlineOf = memo((l): OutlineDoc[] => {
-  if (l.outline) return l.outline;
-  const e = l.edge ?? {};
-  const out: OutlineDoc[] = [];
-  if (Number(e.tear) > 0)
-    out.push({
-      id: `${l.id}-tear`,
-      type: 'tear',
-      visible: true,
-      values: {
-        amount: Number(e.tear),
-        scale: Number(e.tearScale ?? 0.06),
-        seed: Number(e.seed ?? 1),
-      },
-    });
-  if (Number(e.feather) > 0)
-    out.push({
-      id: `${l.id}-feather`,
-      type: 'feather',
-      visible: true,
-      values: { amount: Number(e.feather) },
-    });
-  return out;
-});
-
-// A layer in today's form, with none of the fields its lists replaced.
-export function upgradeLayer(l: LayerDoc): LayerDoc {
-  const out: LayerDoc = {
-    ...l,
-    fills: fillsOf(l),
-    filters: filtersOf(l),
-    strokes: strokesOf(l),
-    shadows: shadowsOf(l),
-    outline: outlineOf(l),
-  };
-  for (const k of ['type', 'version', 'values', 'fx', 'fillSpace'] as const)
-    delete out[k];
-  delete out.edge;
-  return out;
-}
-// An artwork in today's form. Old post processing (grain, vignette) is
-// dropped: those are filters now, added where wanted. So is the layer that
-// briefly stood in for it.
-export function upgrade(d: Artwork): Artwork {
-  return {
-    ...d,
-    layers: d.layers.filter((l) => l.id !== 'post').map(upgradeLayer),
-    post: { grain: 0, grainSize: 1, vignette: 0 },
-  };
-}
-
 // The fill a layer is named and listed by: its topmost one.
-export const primaryFill = (l: LayerDoc) => fillsOf(l).at(-1);
+export const primaryFill = (l: LayerDoc) => l.fills.at(-1);
 
 export const SLUG = /^[a-z0-9][a-z0-9-]*$/;

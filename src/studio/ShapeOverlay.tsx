@@ -134,6 +134,7 @@ export default function ShapeOverlay({
   onPatch,
   onDone,
   onDuplicate,
+  onDuplicateMany,
   size = DESIGN,
 }: {
   tool: Tool;
@@ -152,6 +153,9 @@ export default function ShapeOverlay({
   // Option-drag on a layer copies it in place and drags the copy; gives the
   // copy's id.
   onDuplicate?: (id: string) => string;
+  // ⌥-drag on a selection: copies every selected layer in place, selects the
+  // copies, and gives each copy's id and frame.
+  onDuplicateMany?: () => [string, Frame][];
   size?: Size;
 }) {
   const svg = useRef<SVGSVGElement>(null);
@@ -265,6 +269,12 @@ export default function ShapeOverlay({
       const hit = hitLayer(layers, p);
       // Pressing a selected layer drags the whole selection (a selected
       // background too, which otherwise starts a box).
+      // ⌥ on a selected layer copies the whole selection, then drags the
+      // copies, leaving the originals where they were.
+      if (hit && selection.includes(hit.id) && e.altKey && onDuplicateMany) {
+        setGesture({ kind: 'grabMany', at: p, frames: onDuplicateMany() });
+        return;
+      }
       if (hit && selection.includes(hit.id) && !e.shiftKey && !e.altKey) {
         setGesture({
           kind: 'grabMany',

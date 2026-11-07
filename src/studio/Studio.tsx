@@ -16,14 +16,10 @@ import {
   isFolderKey,
   layersOf,
   DEFAULT_EXPORTS,
-  fillsOf,
-  filtersOf,
-  outlineOf,
-  shadowsOf,
-  strokesOf,
   fullFrame,
   groupLayers,
   layerId,
+  newLayer,
   newArtwork,
   newFill,
   remap,
@@ -31,8 +27,6 @@ import {
   sizeOf,
   tidyGroups,
   ungroupLayers,
-  upgrade,
-  upgradeLayer,
   type Artwork,
   type Frame,
   type FillDoc,
@@ -57,6 +51,7 @@ import {
   shadowSchema,
   strokeSchema,
 } from './studioSchemas';
+import { isMediaFile, isVideoFile, mediaSize, uploadAsset } from './paints';
 import Toolbar from './Toolbar';
 import { hitLayer, TOOLS, typing, type Brush, type Tool } from './tools';
 import {
@@ -140,12 +135,12 @@ const draftKey = (work?: string) => `studio:draft:${work ?? ''}`;
 function initialDoc(work?: string): Artwork {
   try {
     const d = JSON.parse(localStorage.getItem(draftKey(work)) ?? 'null');
-    if (d?.version === DOC_VERSION) return upgrade(d);
+    if (d?.version === DOC_VERSION) return d;
   } catch {
     // A broken draft just means starting from the saved file.
   }
   const saved = work && workOf(work);
-  return saved ? upgrade(structuredClone(saved.doc)) : newArtwork();
+  return saved ? structuredClone(saved.doc) : newArtwork();
 }
 
 // Compose experiments as layers into one artwork, and save it to
@@ -316,6 +311,31 @@ export default function Studio({ work }: { work?: string }) {
     patchMany(ids, (l) => ({ frame: remap(l.frame, box, to) }));
   };
 
+  // An image or video file as a new layer on top, at its own proportions (no
+  // more than 60% of the canvas), centred on `at` or the canvas, selected.
+  const addMedia = async (file: File, at?: { x: number; y: number }) => {
+    const video = isVideoFile(file);
+    const type = video ? 'video' : 'image';
+    const t = types[type];
+    const src = await uploadAsset(file, file.name);
+    const m = await mediaSize(src, video);
+    const k = Math.min(1, (size.w * 0.6) / m.w, (size.h * 0.6) / m.h);
+    const w = Math.round(m.w * k);
+    const h = Math.round(m.h * k);
+    const c = at ?? { x: size.w / 2, y: size.h / 2 };
+    const name =
+      file.name.replace(/\.[^.]+$/, '') || (video ? 'Video' : 'Image');
+    const l = newLayer(
+      name.startsWith('image') ? 'Pasted image' : name,
+      { x: Math.round(c.x - w / 2), y: Math.round(c.y - h / 2), w, h, rot: 0 },
+      [newFill(type, { ...t.initial(), src }, t.version)],
+    );
+    setDoc((d) => ({ ...d, layers: [...d.layers, l] }));
+    setSel([l.id]);
+  };
+  const mediaIn = (list?: FileList | null) =>
+    [...(list ?? [])].filter(isMediaFile);
+
   const addLayer = (
     type: string,
     shape?: { frame: LayerDoc['frame']; shape: ShapeDoc; name: string },
@@ -323,14 +343,9 @@ export default function Studio({ work }: { work?: string }) {
     const t = types[type];
     if (!t) return;
     const l: LayerDoc = {
-      id: layerId(),
-      name: shape?.name ?? t.label,
-      visible: true,
-      frame: shape?.frame ?? fullFrame(size),
-      opacity: 1,
-      blend: 'normal',
-      mask: { source: null, mode: 'alpha', invert: false },
-      fills: [newFill(type, { ...t.initial() }, t.version)],
+      ...newLayer(shape?.name ?? t.label, shape?.frame ?? fullFrame(size), [
+        newFill(type, { ...t.initial() }, t.version),
+      ]),
       ...(shape && { shape: shape.shape }),
     };
     setDoc((d) => {
@@ -447,6 +462,41 @@ export default function Studio({ work }: { work?: string }) {
     });
     setSel(copies.map((c) => c.id));
   };
+  // ⌘V: a copied picture (a screenshot, a file) becomes a layer; otherwise
+  // the layers copied with ⌘C are pasted.
+  const pasteLatest = useRef<(e: ClipboardEvent) => void>(() => {});
+  useEffect(() => {
+    pasteLatest.current = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('input, textarea, [contenteditable]')) return;
+      const files = mediaIn(e.clipboardData?.files);
+      e.preventDefault();
+      if (files.length) files.forEach((f) => void addMedia(f));
+      else paste(clip.current);
+    };
+  });
+  useEffect(() => {
+    const on = (e: ClipboardEvent) => pasteLatest.current(e);
+    addEventListener('paste', on);
+    return () => removeEventListener('paste', on);
+  }, []);
+
+  // Copies of the selected (unlocked) layers just above the topmost, selected;
+  // each copy's id and frame, so a drag can carry them.
+  const duplicateMany = (): [string, Frame][] => {
+    const src = picked.filter((l) => !l.locked);
+    const copies = src.map((l) => ({ ...structuredClone(l), id: layerId() }));
+    setDoc((d) => {
+      const top = Math.max(
+        ...src.map((l) => d.layers.findIndex((x) => x.id === l.id)),
+      );
+      const layers = [...d.layers];
+      layers.splice(top + 1, 0, ...copies);
+      return { ...d, layers };
+    });
+    setSel(copies.map((c) => c.id));
+    return copies.map((c) => [c.id, c.frame]);
+  };
 
   // A copy of one layer just above it, selected; its id, so a drag can carry it.
   const duplicateOne = (id: string) => {
@@ -528,12 +578,11 @@ export default function Studio({ work }: { work?: string }) {
           // schema defaults to mean what it meant when it was saved.
           artwork: {
             ...doc,
-            layers: doc.layers.map((layer) => {
-              const l = upgradeLayer(layer);
+            layers: doc.layers.map((l) => {
               const out: LayerDoc = {
                 ...l,
-                fills: fillsOf(l).map(fullFill),
-                filters: filtersOf(l).map((f) => {
+                fills: l.fills.map(fullFill),
+                filters: l.filters.map((f) => {
                   const schema = FILTERS[f.type]?.schema;
                   return schema
                     ? {
@@ -545,13 +594,13 @@ export default function Studio({ work }: { work?: string }) {
                       }
                     : f;
                 }),
-                strokes: strokesOf(l).map((st): StrokeDoc => ({
+                strokes: l.strokes.map((st): StrokeDoc => ({
                   ...st,
                   ...(defaultsOf(strokeSchema) as Partial<StrokeDoc>),
                   ...(fit(st, strokeSchema) as Partial<StrokeDoc>),
                   fills: st.fills.map(fullFill),
                 })),
-                outline: outlineOf(l).map((o) => {
+                outline: l.outline.map((o) => {
                   const schema = OUTLINES[o.type]?.schema;
                   return schema
                     ? {
@@ -563,7 +612,7 @@ export default function Studio({ work }: { work?: string }) {
                       }
                     : o;
                 }),
-                shadows: shadowsOf(l).map((sh) => ({
+                shadows: l.shadows.map((sh) => ({
                   ...sh,
                   ...defaultsOf(shadowSchema),
                   ...fit(sh, shadowSchema),
@@ -647,7 +696,6 @@ export default function Studio({ work }: { work?: string }) {
         if (k === 'd') return run(() => paste(picked));
         if (k === 'c' && picked.length)
           return run(() => (clip.current = picked));
-        if (k === 'v') return run(() => paste(clip.current));
         if (k === 'l' && e.shiftKey && picked.length) {
           const lock = picked.some((l) => !l.locked);
           return run(() => patchMany(ids, () => ({ locked: lock })));
@@ -775,7 +823,30 @@ export default function Studio({ work }: { work?: string }) {
 
       <Toolbar tool={tool} onTool={setTool} />
 
-      <main className="relative min-h-0" style={{ background: surround }}>
+      <main
+        className="relative min-h-0"
+        style={{ background: surround }}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = mediaIn(e.dataTransfer.files);
+          if (!files.length) return;
+          e.preventDefault();
+          // Where on the artwork it was dropped, in design units.
+          const r = e.currentTarget
+            .querySelector('svg')
+            ?.getBoundingClientRect();
+          const at = r && {
+            x: ((e.clientX - r.left) / r.width) * size.w,
+            y: ((e.clientY - r.top) / r.height) * size.h,
+          };
+          files.forEach(
+            (f, i) =>
+              void addMedia(f, at && { x: at.x + i * 24, y: at.y + i * 24 }),
+          );
+        }}
+      >
         <ArtworkPlayer
           doc={doc}
           navigable
@@ -804,6 +875,7 @@ export default function Studio({ work }: { work?: string }) {
             }
             onPatch={patchLayer}
             onDuplicate={duplicateOne}
+            onDuplicateMany={duplicateMany}
             onDone={() => setTool('select')}
             size={size}
             onCreate={(t, frame, shape) => {
@@ -836,7 +908,6 @@ export default function Studio({ work }: { work?: string }) {
       <aside className="relative flex min-h-0 flex-col overflow-y-auto border-l border-black/8">
         {tool === 'smear' && (
           <ControlGroups
-            id="studio"
             schema={brushSchema}
             values={brush}
             onChange={(k, v) => setBrush((b) => ({ ...b, [k]: v }))}
@@ -924,7 +995,7 @@ export default function Studio({ work }: { work?: string }) {
                 </>
               }
             />
-            <Section id="studio:animation" title="Animation">
+            <Section title="Animation">
               <Labeled label={playing ? 'playing' : 'paused'}>
                 <button
                   onClick={() => {
@@ -938,7 +1009,7 @@ export default function Studio({ work }: { work?: string }) {
                 </button>
               </Labeled>
             </Section>
-            <Section id="studio:canvas" title="Canvas">
+            <Section title="Canvas">
               <Labeled label="aspect">
                 <SelectField
                   value={
@@ -973,7 +1044,6 @@ export default function Studio({ work }: { work?: string }) {
               </div>
             </Section>
             <ControlGroups
-              id="studio"
               titles={{ Artwork: 'Colours' }}
               schema={artworkSchema}
               values={{

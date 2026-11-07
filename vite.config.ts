@@ -123,6 +123,83 @@ function labArtworks(): Plugin {
   };
 }
 
+const ASSETS = path.resolve(import.meta.dirname, './public/studio-assets');
+
+// Images and videos dropped or pasted into the studio: written to
+// `public/studio-assets/<hash>.<ext>` (named by content, so the same file
+// lands once) and referenced from artworks by URL. Dev server only.
+function studioAssets(): Plugin {
+  return {
+    name: 'studio-assets',
+    apply: 'serve',
+    configureServer(server) {
+      // Serve new files straight away; Vite's public-folder list only learns
+      // of them a moment later, so the first request would 404.
+      server.middlewares.use('/studio-assets', (req, res, next) => {
+        const name = path.basename(decodeURIComponent(req.url ?? ''));
+        const file = path.join(ASSETS, name);
+        if (!name || !fs.existsSync(file)) return next();
+        const ext = path.extname(name).slice(1).toLowerCase();
+        const types: Record<string, string> = {
+          png: 'image/png',
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          gif: 'image/gif',
+          webp: 'image/webp',
+          avif: 'image/avif',
+          svg: 'image/svg+xml',
+          mp4: 'video/mp4',
+          webm: 'video/webm',
+          mov: 'video/quicktime',
+        };
+        res.setHeader('content-type', types[ext] ?? 'application/octet-stream');
+        res.setHeader('accept-ranges', 'bytes');
+        // Videos seek with byte ranges.
+        const size = fs.statSync(file).size;
+        const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range ?? '');
+        if (m) {
+          const start = m[1] ? Number(m[1]) : 0;
+          const end = m[2] ? Number(m[2]) : size - 1;
+          res.statusCode = 206;
+          res.setHeader('content-range', `bytes ${start}-${end}/${size}`);
+          res.setHeader('content-length', end - start + 1);
+          fs.createReadStream(file, { start, end }).pipe(res);
+        } else {
+          res.setHeader('content-length', size);
+          fs.createReadStream(file).pipe(res);
+        }
+      });
+      server.middlewares.use('/__lab/asset', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          return res.end();
+        }
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', async () => {
+          try {
+            const ext = String(req.headers['x-ext'] ?? '').toLowerCase();
+            if (!/^(png|jpe?g|gif|webp|avif|svg|mp4|webm|mov)$/.test(ext))
+              throw new Error('unsupported file type');
+            const body = Buffer.concat(chunks);
+            if (!body.length) throw new Error('empty file');
+            const { createHash } = await import('crypto');
+            const name = `${createHash('sha1').update(body).digest('hex').slice(0, 16)}.${ext}`;
+            fs.mkdirSync(ASSETS, { recursive: true });
+            const file = path.join(ASSETS, name);
+            if (!fs.existsSync(file)) fs.writeFileSync(file, body);
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({ url: `/studio-assets/${name}` }));
+          } catch (e) {
+            res.statusCode = 400;
+            res.end(String(e));
+          }
+        });
+      });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     // Generates `src/routeTree.gen.ts` from `src/routes/`; has to run before react.
@@ -132,6 +209,7 @@ export default defineConfig({
     imagetools(),
     labPresets(),
     labArtworks(),
+    studioAssets(),
   ],
   resolve: {
     alias: {

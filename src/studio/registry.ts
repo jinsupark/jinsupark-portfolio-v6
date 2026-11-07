@@ -1,5 +1,10 @@
 import type { LayerType } from './layer';
-import { solidLayer, videoLayer } from './layers/basicLayers';
+import {
+  gradientLayer,
+  imageLayer,
+  solidLayer,
+  videoLayer,
+} from './layers/basicLayers';
 import {
   blueprintLayer,
   collageLayer,
@@ -20,8 +25,10 @@ export const BUILTIN_LAYERS: LayerType[] = [
   cursorLayer,
   collageLayer,
   mapLayer,
-  videoLayer,
   solidLayer,
+  gradientLayer,
+  imageLayer,
+  videoLayer,
 ];
 
 // An artwork's own layer variants: `src/works/<slug>/layers/<name>.ts`, each

@@ -29,7 +29,8 @@ import {
   type ShadowDoc,
   type StrokeDoc,
 } from './document';
-import FillList, { AddMenu, Swatch } from './Fills';
+import { AddMenu, Swatch } from './Fills';
+import PaintPopover from './Paint';
 import type { LayerType } from './layer';
 import {
   FILTERS,
@@ -108,11 +109,12 @@ export function StrokeList({
   types: Record<string, LayerType>;
 }) {
   const { opens, openAt, close, toggle } = usePopovers();
+  // The paint picker, opened from a border's swatch.
+  const paint = usePopovers();
   const patch = (id: string, p: Partial<StrokeDoc>) =>
     onStrokes(patchIn(strokes, id, p));
   return (
     <Section
-      id="insp:Border"
       title="Border"
       aside={
         <AddMenu
@@ -134,10 +136,16 @@ export function StrokeList({
           row={(s) => (
             <>
               <button
+                aria-label="Border paint"
+                onClick={(e) => paint.toggle(s.id, e.currentTarget)}
+                className="shrink-0"
+              >
+                <Swatch f={s.fills[0]} />
+              </button>
+              <button
                 onClick={(e) => toggle(s.id, e.currentTarget)}
                 className={`flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left ${s.visible ? 'text-neutral-800' : 'text-neutral-400'}`}
               >
-                <Swatch f={s.fills.at(-1)} />
                 <span className="truncate">
                   {STROKES[s.type]?.label ?? s.type}
                 </span>
@@ -178,7 +186,7 @@ export function StrokeList({
               at={open}
               onClose={() => close(open.id)}
             >
-              <div className="space-y-1.5 border-b border-black/6 p-3">
+              <div className="space-y-1.5 p-3">
                 <Labeled label="border">
                   <SelectField
                     value={current.type}
@@ -220,14 +228,25 @@ export function StrokeList({
                   />
                 </Labeled>
               </div>
-              <FillList
-                fills={current.fills}
-                onFills={(fills) => patch(current.id, { fills })}
-                types={types}
-                title="Paint"
-                id="insp:StrokePaint"
-              />
             </Popover>
+          )
+        );
+      })}
+      {paint.opens.map((open) => {
+        const current = strokes.find((x) => x.id === open.id);
+        const fill = current?.fills[0];
+        return (
+          current &&
+          fill && (
+            <PaintPopover
+              key={current.id}
+              title="Border paint"
+              fill={fill}
+              types={types}
+              at={open}
+              onPatch={(p) => patch(current.id, { fills: [{ ...fill, ...p }] })}
+              onClose={() => paint.close(open.id)}
+            />
           )
         );
       })}
@@ -248,7 +267,6 @@ export function ShadowList({
     onShadows(patchIn(shadows, id, p));
   return (
     <Section
-      id="insp:Shadow"
       title="Shadow"
       aside={
         <IconButton
@@ -358,7 +376,6 @@ export function FilterList({
   };
   return (
     <Section
-      id="insp:Filters"
       title="Filters"
       aside={
         <AddMenu
@@ -509,7 +526,6 @@ export function ExportSection({
     onExports(patchIn(exports, id, p));
   return (
     <Section
-      id="studio:export"
       title="Export"
       aside={
         <IconButton
@@ -602,7 +618,6 @@ export function ShapeSection({
   };
   return (
     <Section
-      id="insp:Shape"
       title="Shape"
       aside={
         <AddMenu

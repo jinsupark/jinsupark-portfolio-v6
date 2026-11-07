@@ -12,7 +12,7 @@ export const Route = createFileRoute('/experiments/$slug')({
         params: { type: params.slug },
         replace: true,
       });
-    if (!EXPERIMENTS.some((e) => e.slug === params.slug))
+    if (!EXPERIMENTS.some((e) => e.slug === params.slug && e.Component))
       throw redirect({
         to: '/projects',
         search: { tab: 'experiments' },
@@ -24,10 +24,10 @@ export const Route = createFileRoute('/experiments/$slug')({
 
 function ExperimentPage() {
   const { slug } = Route.useParams();
-  const x = EXPERIMENTS.find((e) => e.slug === slug)!;
+  const Page = EXPERIMENTS.find((e) => e.slug === slug)!.Component!;
   return (
     <Suspense fallback={<div className="fixed inset-0 bg-black" />}>
-      <x.Component />
+      <Page />
     </Suspense>
   );
 }

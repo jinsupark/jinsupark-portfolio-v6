@@ -3,13 +3,7 @@
   "slug": "field-notes",
   "title": "Field Notes",
   "about": "A blueprint drawing with the window grid pasted over it and the demo loop printed through both in difference.",
-  "featured": true,
   "background": "#ffffff",
-  "post": {
-    "grain": 0,
-    "grainSize": 1,
-    "vignette": 0
-  },
   "layers": [
     {
       "id": "bp",
@@ -107,12 +101,9 @@
             {
               "id": "jm9dqm3-fill",
               "type": "solid",
-              "version": 1,
+              "version": 2,
               "values": {
-                "color": "#111111",
-                "gradient": false,
-                "color2": "#fcdbe5",
-                "angle": 90
+                "color": "#111111"
               },
               "visible": true,
               "opacity": 1,
@@ -243,12 +234,9 @@
             {
               "id": "12iu1hu-core-fill",
               "type": "solid",
-              "version": 1,
+              "version": 2,
               "values": {
-                "color": "#f8f5ee",
-                "gradient": false,
-                "color2": "#fcdbe5",
-                "angle": 90
+                "color": "#f8f5ee"
               },
               "visible": true,
               "opacity": 1,
@@ -271,12 +259,9 @@
             {
               "id": "a2rmvok-fill",
               "type": "solid",
-              "version": 1,
+              "version": 2,
               "values": {
-                "color": "#111111",
-                "gradient": false,
-                "color2": "#fcdbe5",
-                "angle": 90
+                "color": "#111111"
               },
               "visible": true,
               "opacity": 1,
@@ -332,12 +317,9 @@
         {
           "id": "pc8ip09-fill",
           "type": "solid",
-          "version": 1,
+          "version": 2,
           "values": {
-            "color": "#3d2b33",
-            "gradient": false,
-            "color2": "#fcdbe5",
-            "angle": 90
+            "color": "#3d2b33"
           },
           "visible": true,
           "opacity": 1,
@@ -397,12 +379,9 @@
             {
               "id": "9neu7nh-fill",
               "type": "solid",
-              "version": 1,
+              "version": 2,
               "values": {
-                "color": "#111111",
-                "gradient": false,
-                "color2": "#fcdbe5",
-                "angle": 90
+                "color": "#111111"
               },
               "visible": true,
               "opacity": 1,
@@ -425,12 +404,9 @@
             {
               "id": "f7mzbie-fill",
               "type": "solid",
-              "version": 1,
+              "version": 2,
               "values": {
-                "color": "#f8f5ee",
-                "gradient": false,
-                "color2": "#fcdbe5",
-                "angle": 90
+                "color": "#f8f5ee"
               },
               "visible": true,
               "opacity": 1,
@@ -466,12 +442,9 @@
         {
           "id": "rvu5nqz",
           "type": "solid",
-          "version": 1,
+          "version": 2,
           "values": {
-            "color": "#3d2b33",
-            "gradient": false,
-            "color2": "#fcdbe5",
-            "angle": 90
+            "color": "#3d2b33"
           },
           "visible": true,
           "opacity": 1,
@@ -1271,12 +1244,9 @@
             {
               "id": "zi771xv-fill",
               "type": "solid",
-              "version": 1,
+              "version": 2,
               "values": {
-                "color": "#111111",
-                "gradient": false,
-                "color2": "#fcdbe5",
-                "angle": 90
+                "color": "#111111"
               },
               "visible": true,
               "opacity": 1,
@@ -1358,12 +1328,9 @@
         {
           "id": "61ne928",
           "type": "solid",
-          "version": 1,
+          "version": 2,
           "values": {
-            "color": "#3d2b33",
-            "gradient": false,
-            "color2": "#fcdbe5",
-            "angle": 90
+            "color": "#3d2b33"
           },
           "visible": true,
           "opacity": 1,
@@ -1405,12 +1372,9 @@
         {
           "id": "961brfm",
           "type": "solid",
-          "version": 1,
+          "version": 2,
           "values": {
-            "color": "#3d2b33",
-            "gradient": false,
-            "color2": "#fcdbe5",
-            "angle": 90
+            "color": "#3d2b33"
           },
           "visible": true,
           "opacity": 1,
@@ -1452,12 +1416,9 @@
         {
           "id": "xr2i2ap",
           "type": "solid",
-          "version": 1,
+          "version": 2,
           "values": {
-            "color": "#3d2b33",
-            "gradient": false,
-            "color2": "#fcdbe5",
-            "angle": 90
+            "color": "#3d2b33"
           },
           "visible": true,
           "opacity": 1,
@@ -1566,12 +1527,9 @@
             {
               "id": "4fpbci8-fill",
               "type": "solid",
-              "version": 1,
+              "version": 2,
               "values": {
-                "color": "#f8f5ee",
-                "gradient": false,
-                "color2": "#fcdbe5",
-                "angle": 90
+                "color": "#f8f5ee"
               },
               "visible": true,
               "opacity": 1,
@@ -1590,7 +1548,6 @@
     "w": 800,
     "h": 1000
   },
-  "surround": "#eeeeee",
   "exports": [
     {
       "id": "default",

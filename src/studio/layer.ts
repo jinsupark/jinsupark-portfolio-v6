@@ -43,6 +43,8 @@ export type LayerType<S extends Schema = Schema> = {
   // The experiment's control store a new fill of this type starts from, so
   // the shader playground can tune it and save its defaults.
   store?: ShaderStore;
+  // A first-party paint (the paint picker's tabs) rather than a shader.
+  paint?: 'solid' | 'gradient' | 'image' | 'video';
 };
 
 // What the playground needs of a control store (`lab/controls.ts`).

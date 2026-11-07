@@ -4,7 +4,9 @@ export type Experiment = {
   slug: string;
   title: string;
   about: string;
-  Component: LazyExoticComponent<ComponentType>;
+  // Page-only experiments have a page; the rest open in the shader
+  // playground.
+  Component?: LazyExoticComponent<ComponentType>;
 };
 
 // Each experiment is its own chunk, so three.js and a heavy shader only load on
@@ -22,14 +24,12 @@ export const EXPERIMENTS: Experiment[] = [
     title: 'Window grid',
     about:
       'A mosaic of terminal windows that never stops re-cutting itself: cuts slide, windows split open and collapse shut.',
-    Component: lazy(() => import('./grid/GridExperiment')),
   },
   {
     slug: 'terminal',
     title: 'Terminal content',
     about:
       'What fills the windows: logs, hex dumps, readouts, big type, progress and survey sheets, all surviving a resize mid-animation.',
-    Component: lazy(() => import('./terminal/TerminalExperiment')),
   },
   {
     slug: 'glass',
@@ -43,42 +43,36 @@ export const EXPERIMENTS: Experiment[] = [
     title: 'Blueprint',
     about:
       'The window grid as a drawing: paper tones, overrunning hairlines, small print at the junctions and a reserved handful of pictures.',
-    Component: lazy(() => import('./blueprint/BlueprintExperiment')),
   },
   {
     slug: 'paths',
     title: 'Node path',
     about:
       'A wandering closed line with numbered nodes, loops and doubled markers, set on a fat sticker outline over a dot grid.',
-    Component: lazy(() => import('./paths/PathExperiment')),
   },
   {
     slug: 'scatter',
     title: 'Scattered windows',
     about:
       'Old-OS windows drifting over one picture, each holding a displaced, zoomed fragment of it; they move, resize, close and reopen.',
-    Component: lazy(() => import('./scatter/ScatterExperiment')),
   },
   {
     slug: 'cursors',
     title: 'Cursor orbit',
     about:
       'A swarm of pixel pointers on tilted orbits, larger and on top as they come round the front, drifting after your own pointer.',
-    Component: lazy(() => import('./cursors/CursorExperiment')),
   },
   {
     slug: 'collage',
     title: 'Collage',
     about:
       'Cut and torn paper pasted down one piece at a time — printed strips, cut-outs, tracing paper — with old pieces ripped off and scraps left behind.',
-    Component: lazy(() => import('./collage/CollageExperiment')),
   },
   {
     slug: 'map',
     title: 'City map',
     about:
       'A line-drawn street plan with walking routes laid down in dots, bunching up at each stop with its number, then fading for the next.',
-    Component: lazy(() => import('./map/MapExperiment')),
   },
   {
     slug: 'droplet',

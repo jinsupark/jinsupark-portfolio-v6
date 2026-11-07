@@ -19,12 +19,7 @@ import { defaultsOf, fit } from '@/lab/controls';
 import { newShape, type ShapeDoc } from './shape';
 import { FilterList, ShadowList, ShapeSection, StrokeList } from './Appearance';
 import {
-  fillsOf,
-  filtersOf,
-  outlineOf,
   primaryFill,
-  shadowsOf,
-  strokesOf,
   type Frame,
   type GroupDoc,
   type LayerDoc,
@@ -88,7 +83,7 @@ export default function Inspector({
         onPatch={patch}
       />
       <FillList
-        fills={fillsOf(layer)}
+        fills={layer.fills}
         onFills={(fills) => patch({ fills })}
         types={types}
         onRetype={(f, from, to) => {
@@ -99,20 +94,20 @@ export default function Inspector({
         }}
       />
       <StrokeList
-        strokes={strokesOf(layer)}
+        strokes={layer.strokes}
         onStrokes={(strokes) => patch({ strokes })}
         types={types}
       />
       <ShadowList
-        shadows={shadowsOf(layer)}
+        shadows={layer.shadows}
         onShadows={(shadows) => patch({ shadows })}
       />
       <FilterList
-        filters={filtersOf(layer)}
+        filters={layer.filters}
         onFilters={(filters) => patch({ filters })}
       />
       <ShapeSection
-        outline={outlineOf(layer)}
+        outline={layer.outline}
         onOutline={(outline) => patch({ outline })}
       >
         {layer.shape?.kind === 'path' && (
@@ -142,7 +137,6 @@ export default function Inspector({
       </ShapeSection>
       {combineOn && (
         <ControlGroups
-          id="insp"
           schema={cs}
           values={combine}
           onChange={(k, v) => patch({ combine: { ...combine, [k]: v } })}
@@ -151,7 +145,6 @@ export default function Inspector({
       )}
       {layer.mask.source && (
         <ControlGroups
-          id="insp"
           schema={maskSchema(layer, layers)}
           values={{ ...layer.mask, source: layer.mask.source ?? '' }}
           onChange={(k, v) =>
@@ -178,7 +171,7 @@ function LayoutSection({
   rotate?: boolean;
 }) {
   return (
-    <Section id="insp:Transform" title="Layout">
+    <Section title="Layout">
       <div className="grid grid-cols-2 gap-1.5">
         {(['x', 'y', 'w', 'h'] as const).map((k) => (
           <SchemaNumber
@@ -213,7 +206,7 @@ function BlendingSection({
   onPatch: (p: Partial<LayerDoc>) => void;
 }) {
   return (
-    <Section id="insp:Appearance" title="Blending">
+    <Section title="Blending">
       <div className="grid grid-cols-2 gap-1.5">
         <SchemaNumber
           control={compositeSchema.opacity}
@@ -300,7 +293,7 @@ export function SelectionInspector({
           </>
         }
       />
-      <Section id="insp:Align" title="Align">
+      <Section title="Align">
         <div className="flex items-center gap-1.5">
           {[ALIGNS.slice(0, 3), ALIGNS.slice(3, 6), ALIGNS.slice(6)].map(
             (group, i) => (
@@ -378,10 +371,8 @@ export function FolderInspector({
         onFilters={(filters) => onPatch({ filters })}
       />
       <ControlGroups
-        id="insp:folder"
         schema={maskSchema(asLayer, layers)}
         values={{ ...mask, source: mask.source ?? '' }}
-        closed={mask.source ? [] : ['Mask']}
         onChange={(k, v) =>
           onPatch({
             mask: { ...mask, [k]: k === 'source' ? (v as string) || null : v },

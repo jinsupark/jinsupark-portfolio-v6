@@ -122,7 +122,7 @@ export const shadowSchema = {
   color: color('Shadow', '#1a1712', 'colour'),
 };
 
-export const BOOLEAN_OPS = [
+const BOOLEAN_OPS = [
   { value: 'none', label: 'none' },
   { value: 'union', label: 'unify' },
   { value: 'intersect', label: 'intersect' },

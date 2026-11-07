@@ -17,13 +17,8 @@ import {
   chainOf,
   DESIGN,
   sizeOf,
-  fillsOf,
-  filtersOf,
   layersIn,
   plainFolder,
-  outlineOf,
-  shadowsOf,
-  strokesOf,
   type Artwork,
   type FillDoc,
   type GroupDoc,
@@ -78,12 +73,12 @@ type Outline = {
   seed: number;
 };
 const outlines = new WeakMap<LayerDoc, Outline>();
-export function outlineSum(l: LayerDoc): Outline {
+function outlineSum(l: LayerDoc): Outline {
   let o = outlines.get(l);
   if (o) return o;
   const tears: Outline['tears'] = [];
   let feather = 0;
-  for (const x of outlineOf(l)) {
+  for (const x of l.outline) {
     const def = OUTLINES[x.type];
     if (!x.visible || !def) continue;
     const v = { ...defaultsOf(def.schema), ...fit(x.values, def.schema) };
@@ -106,16 +101,16 @@ export function outlineSum(l: LayerDoc): Outline {
   return o;
 }
 
-export function padOf(l: LayerDoc) {
+function padOf(l: LayerDoc) {
   const e = outlineSum(l);
   let reach = 0;
-  for (const s of strokesOf(l)) {
+  for (const s of l.strokes) {
     if (!s.visible) continue;
     const w = s.width * (1 + fibresOf(s));
     const out = s.align === 'outside' ? w : s.align === 'center' ? w / 2 : 0;
     reach = Math.max(reach, out + Math.max(0, s.offset));
   }
-  for (const s of shadowsOf(l))
+  for (const s of l.shadows)
     if (s.visible)
       reach = Math.max(reach, Math.abs(s.x) + Math.abs(s.y) + s.blur);
   return 24 + e.tear * 1.5 + e.feather + reach;
@@ -274,11 +269,6 @@ export class Compositor {
   });
   private post = pass(POST_FRAG, {
     uSrc: { value: null },
-    uRes: { value: new THREE.Vector2() },
-    uTime: { value: 0 },
-    uGrain: { value: 0 },
-    uGrainSize: { value: 1 },
-    uVignette: { value: 0 },
     uView: { value: new THREE.Vector4(0, 0, DESIGN.w, DESIGN.h) },
     uDesign: { value: new THREE.Vector2(DESIGN.w, DESIGN.h) },
     uSurround: { value: new THREE.Vector3(0.64, 0.64, 0.64) },
@@ -414,10 +404,7 @@ export class Compositor {
     this.size = sizeOf(doc);
     const fills = new Map(
       doc.layers
-        .flatMap((l) => [
-          ...fillsOf(l),
-          ...strokesOf(l).flatMap((s) => s.fills),
-        ])
+        .flatMap((l) => [...l.fills, ...l.strokes.flatMap((s) => s.fills)])
         .map((f) => [f.id, f]),
     );
     for (const [id, e] of this.instances) {
@@ -444,7 +431,7 @@ export class Compositor {
   // A layer with a shape-style fill (Node path) is drawn from its outline
   // rather than cut to it.
   private isStyled(l: LayerDoc) {
-    return fillsOf(l).some((f) => f.visible && this.types[f.type]?.shapeStyle);
+    return l.fills.some((f) => f.visible && this.types[f.type]?.shapeStyle);
   }
 
   // A shape style draws stickers and labels past its outline, so it gets
@@ -587,7 +574,7 @@ export class Compositor {
         w: f.w + 2 * pad,
         h: f.h + 2 * pad,
       };
-    if (fillsOf(l)[0]?.fillSpace === 'canvas')
+    if (l.fills[0]?.fillSpace === 'canvas')
       return { x: 0, y: 0, ...this.size, rot: 0 };
     return f;
   }
@@ -680,7 +667,7 @@ export class Compositor {
   // `base`, the artwork behind the layer, and lays its result over.
   private runFilters(l: LayerDoc, pair: Pair, base: THREE.Texture) {
     const pad = this.padFor(l);
-    for (const f of filtersOf(l)) {
+    for (const f of l.filters) {
       const def = FILTERS[f.type];
       if (!f.visible || !def) continue;
       const v = this.valuesOf(f, def.schema);
@@ -726,10 +713,8 @@ export class Compositor {
     dt: number,
   ) {
     this.clear(pair[0]);
-    const drew = this.stackFills(l, fillsOf(l), pair, scale, dt);
-    const behind = filtersOf(l).some(
-      (f) => f.visible && f.input === 'background',
-    );
+    const drew = this.stackFills(l, l.fills, pair, scale, dt);
+    const behind = l.filters.some((f) => f.visible && f.input === 'background');
     if (!drew && !behind) return null;
     this.runFilters(l, pair, base);
     return pair[0].texture;
@@ -900,10 +885,10 @@ export class Compositor {
       // A matte's fills are reused unless a filter reads the artwork behind
       // it, which only exists now.
       const pair = this.build;
-      const behind = filtersOf(l).some((f) => f.input === 'background');
+      const behind = l.filters.some((f) => f.input === 'background');
       const kept = !behind && matte.get(l.id);
       let tex = kept || this.fillsInto(l, pair, base.texture, scale, dt);
-      const strokes = strokesOf(l).filter((x) => x.visible);
+      const strokes = l.strokes.filter((x) => x.visible);
       if (!tex && !strokes.length) return;
       if (!tex) {
         this.clear(pair[0]);
@@ -944,9 +929,7 @@ export class Compositor {
       u.uBase.value = base.texture;
       u.uLayer.value = tex;
       u.uDist.value = this.dist.texture;
-      const shadows = shadowsOf(l)
-        .filter((x) => x.visible)
-        .slice(0, MAX_SHADOWS);
+      const shadows = l.shadows.filter((x) => x.visible).slice(0, MAX_SHADOWS);
       u.uShadows.value = shadows.length;
       shadows.forEach((x, i) => {
         u.uShadowGeo.value[i].set(x.x, x.y, x.blur, 0);
@@ -962,7 +945,7 @@ export class Compositor {
       if (src) {
         // A mask covers wherever its fills were laid: the whole artwork for a
         // canvas-space fill, otherwise its frame.
-        const whole = fillsOf(src).some((x) => x.fillSpace === 'canvas');
+        const whole = src.fills.some((x) => x.fillSpace === 'canvas');
         u.uMaskFrame.value.set(
           whole ? 0 : src.frame.x,
           whole ? 0 : src.frame.y,
@@ -1012,7 +995,7 @@ export class Compositor {
       gu.uMask.value = mtex ?? f.pair[0].texture;
       gu.uMaskInvert.value = !!g.mask?.invert;
       if (src) {
-        const whole = fillsOf(src).some((x) => x.fillSpace === 'canvas');
+        const whole = src.fills.some((x) => x.fillSpace === 'canvas');
         gu.uMaskFrame.value.set(
           whole ? 0 : src.frame.x,
           whole ? 0 : src.frame.y,
@@ -1095,25 +1078,8 @@ export class Compositor {
 
     const p = this.post.uniforms;
     p.uSrc.value = this.targets[0].texture;
-    p.uRes.value.set(this.px.w, this.px.h);
-    p.uTime.value = this.time;
-    // Grain and vignette are filters now; the old post settings are ignored.
-    p.uGrain.value = 0;
-    p.uGrainSize.value = 1;
-    p.uVignette.value = 0;
     p.uSurround.value = rgb(this.surround);
     this.draw(this.post, null);
-  }
-
-  // The current frame as a JPEG data URL, `width` pixels across. Rendered
-  // and read back in one task, so the drawing buffer hasn't been cleared yet.
-  snapshot(width = 800) {
-    this.render(0);
-    const c = document.createElement('canvas');
-    c.width = width;
-    c.height = Math.round((width * this.size.h) / this.size.w);
-    c.getContext('2d')!.drawImage(this.canvas, 0, 0, c.width, c.height);
-    return c.toDataURL('image/jpeg', 0.86);
   }
 
   dispose() {

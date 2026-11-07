@@ -1,11 +1,17 @@
-import { DOC_VERSION, fullFrame, type Artwork, type Size } from './document';
+import {
+  DOC_VERSION,
+  fullFrame,
+  newLayer,
+  type Artwork,
+  type Size,
+} from './document';
 import { renderArtwork } from './exporter';
 import type { LayerType } from './layer';
 import { BUILTIN_LAYERS } from './registry';
 
 // The shaders the projects page lists and the playground opens: every
-// built-in fill type.
-export const SHADERS: LayerType[] = BUILTIN_LAYERS;
+// built-in fill type that isn't a first-party paint.
+export const SHADERS: LayerType[] = BUILTIN_LAYERS.filter((t) => !t.paint);
 export const SHADER_TYPES: Record<string, LayerType> = Object.fromEntries(
   SHADERS.map((t) => [t.type, t]),
 );
@@ -24,17 +30,11 @@ export function shaderArtwork(
     about: '',
     background: '#e3e1dc',
     size,
-    post: { grain: 0, grainSize: 1, vignette: 0 },
     layers: [
-      {
-        id: 'shader',
-        name: t.label,
-        visible: true,
-        frame: fullFrame(size),
-        opacity: 1,
-        blend: 'normal',
-        mask: { source: null, mode: 'alpha', invert: false },
-        fills: [
+      newLayer(
+        t.label,
+        fullFrame(size),
+        [
           {
             id: 'shader-fill',
             type: t.type,
@@ -45,7 +45,8 @@ export function shaderArtwork(
             blend: 'normal',
           },
         ],
-      },
+        'shader',
+      ),
     ],
   };
 }
