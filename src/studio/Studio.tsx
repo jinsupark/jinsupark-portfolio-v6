@@ -20,6 +20,7 @@ import {
   groupLayers,
   layerId,
   newLayer,
+  withLists,
   newArtwork,
   newFill,
   remap,
@@ -53,6 +54,7 @@ import {
 } from './studioSchemas';
 import { isMediaFile, isVideoFile, mediaSize, uploadAsset } from './paints';
 import Toolbar from './Toolbar';
+import { useHistory } from './useHistory';
 import { hitLayer, TOOLS, typing, type Brush, type Tool } from './tools';
 import {
   ControlGroups,
@@ -126,7 +128,6 @@ const SHAPE_NAMES: Partial<Record<Tool, string>> = {
 };
 
 // Edits closer together than this are one step of undo, so a drag is one.
-const COALESCE_MS = 400;
 
 // Unsaved edits survive a reload: one draft per opened work, plus one for a
 // work that hasn't been saved yet.
@@ -135,12 +136,12 @@ const draftKey = (work?: string) => `studio:draft:${work ?? ''}`;
 function initialDoc(work?: string): Artwork {
   try {
     const d = JSON.parse(localStorage.getItem(draftKey(work)) ?? 'null');
-    if (d?.version === DOC_VERSION) return d;
+    if (d?.version === DOC_VERSION) return withLists(d);
   } catch {
     // A broken draft just means starting from the saved file.
   }
   const saved = work && workOf(work);
-  return saved ? structuredClone(saved.doc) : newArtwork();
+  return saved ? withLists(structuredClone(saved.doc)) : newArtwork();
 }
 
 // Compose experiments as layers into one artwork, and save it to
@@ -226,35 +227,10 @@ export default function Studio({ work }: { work?: string }) {
     return () => clearTimeout(t);
   }, [doc, work]);
 
-  const hist = useRef({
-    past: [] as Artwork[],
-    future: [] as Artwork[],
-    prev: null as Artwork | null,
-    at: 0,
-    replaying: false,
-  });
-  useEffect(() => {
-    const h = hist.current;
-    if (h.replaying) h.replaying = false;
-    else if (h.prev && h.prev !== doc) {
-      const now = performance.now();
-      if (now - h.at > COALESCE_MS) {
-        h.past.push(h.prev);
-        if (h.past.length > 200) h.past.shift();
-      }
-      h.future = [];
-      h.at = now;
-    }
-    h.prev = doc;
-  }, [doc]);
+  const history = useHistory(doc, setDoc);
   const step = (back: boolean) => {
-    const h = hist.current;
-    const next = (back ? h.past : h.future).pop();
-    if (!next || !h.prev) return;
-    (back ? h.future : h.past).push(h.prev);
-    h.replaying = true;
-    h.at = 0;
-    setDoc(next);
+    const next = history(back);
+    if (!next) return;
     const kept = sel.filter((id) =>
       isFolderKey(id)
         ? next.groups?.some((g) => folderKey(g.id) === id)

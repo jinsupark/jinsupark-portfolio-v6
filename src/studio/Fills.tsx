@@ -170,9 +170,8 @@ export default function FillList({
             <IconButton
               title="Remove fill"
               onClick={() => onFills(fills.filter((x) => x.id !== f.id))}
-              className="size-5!"
             >
-              <Minus size={12} />
+              <Minus size={13} />
             </IconButton>
           </>
         )}

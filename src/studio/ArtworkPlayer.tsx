@@ -198,6 +198,9 @@ export default function ArtworkPlayer({
     const ro = new ResizeObserver(([entry]) => {
       const r = entry.contentRect;
       setHostSize({ w: r.width, h: r.height });
+      // A resize redraws at once (a fresh canvas size starts blank), rather
+      // than waiting for the gesture to settle like a pan.
+      setDrawn(null);
     });
     ro.observe(el);
     return () => ro.disconnect();

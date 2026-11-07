@@ -107,7 +107,7 @@ export function hitLayer(layers: LayerDoc[], p: P) {
 
 // Where a popover opened from `el` goes: beside the panel or popover it was
 // opened from, a few pixels off, level with `el` where the screen allows.
-const POPOVER_W = 264;
+const POPOVER_W = 280;
 export function popoverAt(el: Element, width = POPOVER_W) {
   // Only a popover opened from inside another sits beside it; one opened
   // from the panel replaces whatever was open, so it takes the usual place.

@@ -493,6 +493,20 @@ export const newFilter = (
   input: 'layer',
 });
 
+// An opened artwork with every layer's lists present (empty where a draft or
+// file left one out), so nothing downstream has to guard for them.
+export const withLists = (d: Artwork): Artwork => ({
+  ...d,
+  layers: d.layers.map((l) => ({
+    ...l,
+    fills: l.fills ?? [],
+    filters: l.filters ?? [],
+    strokes: l.strokes ?? [],
+    shadows: l.shadows ?? [],
+    outline: l.outline ?? [],
+  })),
+});
+
 // The fill a layer is named and listed by: its topmost one.
 export const primaryFill = (l: LayerDoc) => l.fills.at(-1);
 

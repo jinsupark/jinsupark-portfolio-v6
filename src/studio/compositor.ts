@@ -52,6 +52,7 @@ const OP = {
   stroke: 9,
   grain: 10,
   vignette: 11,
+  water: 12,
 } as const;
 const ALIGN = ['inside', 'center', 'outside'];
 const blendOf = (b: string) =>
@@ -671,7 +672,8 @@ export class Compositor {
       const def = FILTERS[f.type];
       if (!f.visible || !def) continue;
       const v = this.valuesOf(f, def.schema);
-      const input = f.input === 'background' ? 1 : 0;
+      // Water always works on what's behind.
+      const input = f.input === 'background' || f.type === 'water' ? 1 : 0;
       if (f.type === 'blur') {
         const r = Number(v.radius) || 0;
         const src = input ? base : pair[0].texture;
@@ -695,7 +697,9 @@ export class Compositor {
         u.uAmount.value =
           f.type === 'grain' || f.type === 'vignette'
             ? Number(v.amount)
-            : Math.max(1e-3, Number(v.levels ?? v.level ?? v.scale ?? 1));
+            : f.type === 'water'
+              ? Number(v.bend)
+              : Math.max(1e-3, Number(v.levels ?? v.level ?? v.scale ?? 1));
         u.uGrainPx.value = Number(v.size ?? 1) * (this.px.w / this.viewOf().w);
         u.uTime.value = this.time;
         u.uInk.value = rgb(String(v.ink ?? '#000000'));
@@ -714,7 +718,9 @@ export class Compositor {
   ) {
     this.clear(pair[0]);
     const drew = this.stackFills(l, l.fills, pair, scale, dt);
-    const behind = l.filters.some((f) => f.visible && f.input === 'background');
+    const behind = l.filters.some(
+      (f) => f.visible && (f.input === 'background' || f.type === 'water'),
+    );
     if (!drew && !behind) return null;
     this.runFilters(l, pair, base);
     return pair[0].texture;
@@ -885,7 +891,9 @@ export class Compositor {
       // A matte's fills are reused unless a filter reads the artwork behind
       // it, which only exists now.
       const pair = this.build;
-      const behind = l.filters.some((f) => f.input === 'background');
+      const behind = l.filters.some(
+        (f) => f.input === 'background' || f.type === 'water',
+      );
       const kept = !behind && matte.get(l.id);
       let tex = kept || this.fillsInto(l, pair, base.texture, scale, dt);
       const strokes = l.strokes.filter((x) => x.visible);

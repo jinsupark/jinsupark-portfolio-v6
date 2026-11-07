@@ -339,6 +339,21 @@ void main() {
       vec2 dv = p / uDesign - 0.5;
       s.rgb *= 1.0 - uAmount * smoothstep(0.2, 0.8, dot(dv, dv) * 2.0);
     }
+    if (uOp == 12) {
+      // Water, as in the droplet experiment: what's behind, bent toward the
+      // rim like a lens, split a little into colour, with a lit edge.
+      float depth = max(-d, 0.0);
+      float rim = exp(-depth / max(uAmount * 0.6, 1.0));
+      vec2 n = normalize(vec2(dFdx(d), -dFdy(d)) + 1e-6);
+      vec2 bend = n * uAmount * rim;
+      s.r = readInput(p + bend * 1.06).r;
+      s.g = readInput(p + bend).g;
+      s.b = readInput(p + bend * 0.94).b;
+      s.rgb *= 1.0 - 0.14 * rim;
+      float lit = max(dot(n, normalize(vec2(-0.6, -0.8))), 0.0);
+      s.rgb += 0.55 * lit * smoothstep(3.0, 0.0, depth);
+      s.rgb = clamp(s.rgb, 0.0, 1.0);
+    }
     if (uOp == 6) {
       float t = bayer4(floor(l * uFrame.zw / uAmount));
       s.rgb = mix(uInk, uPaper, step(t, luma(s.rgb)));

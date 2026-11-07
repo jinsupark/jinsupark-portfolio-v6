@@ -66,6 +66,7 @@ export default function PaintPopover({
   onPatch,
   onRetype,
   onClose,
+  extra,
 }: {
   fill: FillDoc;
   types: Record<string, LayerType>;
@@ -78,6 +79,8 @@ export default function PaintPopover({
     to: LayerType,
   ) => void;
   onClose: () => void;
+  // More settings under the paint's (a border's width, position…).
+  extra?: React.ReactNode;
 }) {
   const t = types[fill.type];
   const tab: Tab = t?.paint ?? 'shader';
@@ -197,6 +200,7 @@ export default function PaintPopover({
         </>
       )}
 
+      {extra}
       <div className="space-y-1.5 border-t border-black/6 p-3">
         {!t?.shapeStyle && (
           <Row

@@ -270,6 +270,27 @@ Home with a short about and contact links.
  - Reordering stays inside the layer's folder, and stepping past another folder hops it
  whole.
 
+## Studio, current shape (supersedes older notes above where they differ)
+- **Format:** layers always carry `fills`, `filters`, `strokes`, `shadows` and `outline`
+ (`newLayer`; `withLists` fills gaps in drafts). Old formats aren't read any more. There's no
+ `post`: grain, vignette and water are filters.
+- **Paints** (`Paint.tsx`, `paints.ts`, `layers/basicLayers.ts`): Solid, Gradient
+ (linear/radial, stops kept as a `"#hex at, …"` string), Image and Video, marked
+ `LayerType.paint`. Everything else is a shader. One picker opens from every swatch, with
+ tabs and a shader dropdown that previews on hover (`Menu.preview`). A border has exactly
+ one paint.
+- **Media:** dropping files on the canvas or pasting with ⌘V makes image or video layers. The
+ dev server saves files to `public/studio-assets/<sha1>.<ext>` (`/__lab/asset`) and serves
+ them straight away, with byte ranges.
+- **Water** is a filter (`OP.water`) that always reads what's behind the layer and bends it
+ toward the rim using the distance field.
+- **UI kit** is `src/studio/ui/`: basics, menu, popover, color, rows, list and shared,
+ re-exported by `index.ts`. Lists of items (Border, Shadow, Filters, Shape) share `ItemList`
+ in `Appearance.tsx`.
+- **Undo** lives in `useHistory.ts`.
+- **Tests:** `npm test` (vitest) covers geometry, paints and folders. A rendering change
+ should still get a `field-notes` pixel comparison.
+
 ## Pages
 - `/projects`: the public projects page, with tabs (`?tab=`).
  - **Works:** thumbnails.

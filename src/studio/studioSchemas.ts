@@ -159,6 +159,11 @@ export const FILTERS: Record<
   string,
   { label: string; main?: string; schema: Schema }
 > = {
+  water: {
+    label: 'Water',
+    main: 'bend',
+    schema: { bend: range('Water', 24, 0, 120, 0.5) },
+  },
   blur: {
     label: 'Blur',
     main: 'radius',
