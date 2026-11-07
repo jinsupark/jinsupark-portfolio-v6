@@ -22,12 +22,14 @@ import {
   newFilter,
   newOutline,
   isVideo,
-  newShadow,
+  newEffect,
   newStroke,
+  effectType,
+  type EffectDoc,
   type ExportDoc,
+  type FillDoc,
   type FilterDoc,
   type OutlineDoc,
-  type ShadowDoc,
   type StrokeDoc,
 } from './document';
 import { AddMenu, Swatch } from './Fills';
@@ -36,10 +38,9 @@ import type { LayerType } from './layer';
 import {
   FILTERS,
   filterInputSchema,
+  EFFECTS,
   OUTLINES,
-  shadowSchema,
   strokeSchema,
-  STROKES,
 } from './studioSchemas';
 import { usePopovers } from './tools';
 import {
@@ -54,10 +55,6 @@ import {
   SortableList,
 } from './ui';
 
-const strokeOptions = Object.entries(STROKES).map(([value, s]) => ({
-  value,
-  label: s.label,
-}));
 const ALIGN_LABELS: Record<string, string> = {
   inside: 'Inside',
   center: 'Centre',
@@ -99,8 +96,50 @@ function Remove({ onClick, what }: { onClick: () => void; what: string }) {
   );
 }
 
-// Bands along the shape's edge. A border's popover is the paint picker, with
-// its width, position, sides and fibres underneath.
+const SIDE_LABELS: Record<string, string> = {
+  all: 'All',
+  top: 'Top',
+  bottom: 'Bottom',
+  left: 'Left',
+  right: 'Right',
+};
+// Every border setting but the join (its own buttons) and the miter angle
+// (under them).
+const { join: _join, miterAngle, ...strokeRows } = strokeSchema;
+const JOINS = [
+  { value: 'miter', label: 'Miter' },
+  { value: 'round', label: 'Round' },
+  { value: 'bevel', label: 'Bevel' },
+] as const;
+
+// A row of buttons for one choice, like Figma's join picker.
+function Segmented({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: readonly { value: string; label: string }[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex h-7 rounded-md bg-black/5 p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={`flex-1 rounded-[5px] ${value === o.value ? 'bg-white text-neutral-900 shadow-[0_1px_2px_rgb(0_0_0/0.12)]' : 'text-neutral-500 hover:text-neutral-800'}`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Lines along the shape's edge, like Figma's and Paper's strokes: each row is
+// its paint (the swatch opens the paint picker), weight and sides; the
+// sliders open the rest — position, offset, how corners join.
 export function StrokeList({
   strokes,
   onStrokes,
@@ -110,7 +149,7 @@ export function StrokeList({
   onStrokes: (next: StrokeDoc[]) => void;
   types: Record<string, LayerType>;
 }) {
-  const pop = usePopovers();
+  const paint = usePopovers();
   const patch = (id: string, p: Partial<StrokeDoc>) =>
     onStrokes(patchIn(strokes, id, p));
   return (
@@ -119,40 +158,95 @@ export function StrokeList({
       what={() => 'border'}
       items={strokes}
       onItems={onStrokes}
-      add={() => (
-        <AddMenu
+      add={(open) => (
+        <IconButton
           title="Add a border"
-          options={strokeOptions}
-          onPick={(type, el) => {
-            const s = newStroke(type);
+          onClick={(e) => {
+            const s = newStroke();
             onStrokes([...strokes, s]);
-            pop.openAt(s.id, el);
+            open(s.id, e.currentTarget);
           }}
-        />
+        >
+          <Plus size={13} />
+        </IconButton>
       )}
-      row={(s) => (
+      row={(s, api) => (
         <>
-          <RowLabel visible={s.visible} onOpen={(el) => pop.toggle(s.id, el)}>
+          <RowLabel visible={s.visible} onOpen={(el) => paint.toggle(s.id, el)}>
             <Swatch f={s.fills[0]} />
-            <span className="truncate">{STROKES[s.type]?.label ?? s.type}</span>
+            <span className="truncate">{paintLabel(s.fills[0], types)}</span>
             <span className="shrink-0 text-neutral-400">
               {ALIGN_LABELS[s.align]}
-              {s.sides && s.sides !== 'all' ? ` · ${s.sides}` : ''}
+              {s.sides && s.sides !== 'all' ? ` · ${SIDE_LABELS[s.sides]}` : ''}
             </span>
           </RowLabel>
           <NumberField
             value={s.width}
-            onChange={(width) => patch(s.id, { width })}
+            onChange={(width) => api.patch({ width })}
             min={0.1}
             max={80}
             step={0.1}
             prefix={<CircleDashed size={11} />}
             className="w-16 shrink-0"
           />
+          <IconButton
+            title="Border settings"
+            active={api.open}
+            onClick={(e) => api.toggle(e.currentTarget)}
+            className="size-5!"
+          >
+            <SlidersHorizontal size={12} />
+          </IconButton>
         </>
       )}
+      popover={(s, api) => ({
+        title: 'Border settings',
+        body: (
+          <div className="space-y-1.5 p-3">
+            <Rows
+              schema={strokeRows}
+              values={{ sides: 'all', join: 'round', miterAngle: 28.96, ...s }}
+              onChange={(k, v) => api.patch({ [k]: v })}
+            />
+            <Labeled label="join">
+              <Segmented
+                value={s.join ?? 'round'}
+                options={JOINS}
+                onChange={(join) =>
+                  api.patch({ join: join as StrokeDoc['join'] })
+                }
+              />
+            </Labeled>
+            {s.join === 'miter' && (
+              <Row
+                name="miterAngle"
+                control={miterAngle}
+                value={s.miterAngle ?? 28.96}
+                onChange={(v) => api.patch({ miterAngle: Number(v) })}
+              />
+            )}
+            <Labeled label="opacity">
+              <NumberField
+                value={s.opacity}
+                onChange={(opacity) => api.patch({ opacity })}
+                min={0}
+                max={1}
+                step={0.01}
+                factor={100}
+                suffix="%"
+              />
+            </Labeled>
+            {(s.join ?? 'round') !== 'round' && (
+              <p className="text-neutral-400">
+                Sharp corners apply to straight, convex outlines; curves and
+                torn edges stay round.
+              </p>
+            )}
+          </div>
+        ),
+      })}
     >
-      {pop.opens.map((open) => {
+      {paint.opens.map((open) => {
         const s = strokes.find((x) => x.id === open.id);
         const fill = s?.fills[0];
         return (
@@ -160,54 +254,29 @@ export function StrokeList({
           fill && (
             <PaintPopover
               key={s.id}
-              title={STROKES[s.type]?.label ?? 'Border'}
+              title="Border paint"
+              kinds={['solid', 'gradient', 'shader']}
               fill={fill}
               types={types}
               at={open}
               onPatch={(p) => patch(s.id, { fills: [{ ...fill, ...p }] })}
-              onClose={() => pop.close(open.id)}
-              extra={
-                <div className="space-y-1.5 border-t border-black/6 p-3">
-                  <Labeled label="border">
-                    <SelectField
-                      value={s.type}
-                      options={strokeOptions}
-                      onChange={(type) =>
-                        // Fibres start from their own default amount.
-                        patch(s.id, {
-                          type,
-                          ...(type === 'fibres' &&
-                            !(s.fibers > 0) && {
-                              fibers: newStroke(type).fibers,
-                            }),
-                        })
-                      }
-                    />
-                  </Labeled>
-                  <Rows
-                    schema={{ ...strokeSchema, ...STROKES[s.type]?.schema }}
-                    values={{ sides: 'all', ...s }}
-                    onChange={(k, v) => patch(s.id, { [k]: v })}
-                  />
-                  <Labeled label="opacity">
-                    <NumberField
-                      value={s.opacity}
-                      onChange={(opacity) => patch(s.id, { opacity })}
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      factor={100}
-                      suffix="%"
-                    />
-                  </Labeled>
-                </div>
-              }
+              onClose={() => paint.close(open.id)}
             />
           )
         );
       })}
     </ItemList>
   );
+}
+
+// How a paint reads in a row: a solid's hex, otherwise its type.
+function paintLabel(f: FillDoc | undefined, types: Record<string, LayerType>) {
+  if (!f) return 'None';
+  if (f.type === 'solid')
+    return String(f.values.color ?? '')
+      .replace('#', '')
+      .toUpperCase();
+  return types[f.type]?.label ?? f.type;
 }
 
 // A section holding a list of items, each a row that can open its own
@@ -316,57 +385,108 @@ function RowLabel({
   );
 }
 
-// The shape, offset and softened, under the layer.
-export function ShadowList({
-  shadows,
-  onShadows,
+const effectOptions = (Object.keys(EFFECTS) as (keyof typeof EFFECTS)[]).map(
+  (value) => ({ value, label: EFFECTS[value].label }),
+);
+
+// Effects on the shape, like Figma's: drop and inner shadows and paper
+// fibres, each one colour. A folder has drop shadows only.
+export function EffectList({
+  effects,
+  onEffects,
+  shadowsOnly = false,
 }: {
-  shadows: ShadowDoc[];
-  onShadows: (next: ShadowDoc[]) => void;
+  effects: EffectDoc[];
+  onEffects: (next: EffectDoc[]) => void;
+  shadowsOnly?: boolean;
 }) {
+  const options = shadowsOnly
+    ? effectOptions.filter((o) => o.value === 'drop')
+    : effectOptions;
+  const valuesOf = (e: EffectDoc) => {
+    const schema = EFFECTS[effectType(e)].schema;
+    return { ...defaultsOf(schema), ...fit(e, schema) };
+  };
   return (
     <ItemList
-      title="Shadow"
-      what={() => 'shadow'}
-      items={shadows}
-      onItems={onShadows}
-      add={() => (
-        <IconButton
-          title="Add a shadow"
-          onClick={() => onShadows([...shadows, newShadow()])}
-        >
-          <Plus size={13} />
-        </IconButton>
+      title="Effects"
+      what={(e) => EFFECTS[effectType(e)].label.toLowerCase()}
+      items={effects}
+      onItems={onEffects}
+      add={(open) => (
+        <AddMenu
+          title="Add an effect"
+          options={options}
+          onPick={(type, el) => {
+            const e = newEffect(type as EffectDoc['type']);
+            onEffects([...effects, e]);
+            open(e.id, el);
+          }}
+        />
       )}
-      row={(s, api) => (
-        <>
-          <RowLabel visible={s.visible} onOpen={api.toggle}>
-            <span
-              className="size-4 shrink-0 rounded-[3px] border border-black/15"
-              style={{ background: s.color }}
-            />
-            <span className="truncate">Drop shadow</span>
-          </RowLabel>
-          <NumberField
-            value={s.opacity}
-            onChange={(opacity) => api.patch({ opacity })}
-            min={0}
-            max={1}
-            step={0.01}
-            factor={100}
-            suffix="%"
-            className="w-14 shrink-0"
-          />
-        </>
-      )}
-      popover={(s, api) => ({
-        title: 'Drop shadow',
+      row={(e, api) => {
+        const def = EFFECTS[effectType(e)];
+        const control = def.schema[def.main];
+        const v = valuesOf(e);
+        return (
+          <>
+            <RowLabel visible={e.visible} onOpen={api.toggle}>
+              <span
+                className="size-4 shrink-0 rounded-[3px] border border-black/15"
+                style={{ background: e.color }}
+              />
+              <span className="truncate">{def.label}</span>
+            </RowLabel>
+            {control?.kind === 'range' && (
+              <NumberField
+                value={Number(v[def.main])}
+                onChange={(x) => api.patch({ [def.main]: x })}
+                min={control.min}
+                max={control.max}
+                step={control.step}
+                className="w-14 shrink-0"
+              />
+            )}
+          </>
+        );
+      }}
+      popover={(e, api) => ({
+        title: EFFECTS[effectType(e)].label,
         body: (
           <div className="space-y-1.5 p-3">
+            {!shadowsOnly && (
+              <Labeled label="effect">
+                <SelectField
+                  value={effectType(e)}
+                  options={options}
+                  onChange={(type) => {
+                    const fresh = newEffect(type as EffectDoc['type']);
+                    api.patch({ ...fresh, id: e.id, visible: e.visible });
+                  }}
+                />
+              </Labeled>
+            )}
+            <Row
+              name="colour"
+              control={{ kind: 'color', group: 'Effect', value: e.color }}
+              value={e.color}
+              onChange={(color) => api.patch({ color: String(color) })}
+            />
+            <Labeled label="opacity">
+              <NumberField
+                value={e.opacity}
+                onChange={(opacity) => api.patch({ opacity })}
+                min={0}
+                max={1}
+                step={0.01}
+                factor={100}
+                suffix="%"
+              />
+            </Labeled>
             <Rows
-              schema={shadowSchema}
-              values={s}
-              onChange={(k, v) => api.patch({ [k]: v })}
+              schema={EFFECTS[effectType(e)].schema}
+              values={valuesOf(e)}
+              onChange={(k, x) => api.patch({ [k]: x })}
             />
           </div>
         ),

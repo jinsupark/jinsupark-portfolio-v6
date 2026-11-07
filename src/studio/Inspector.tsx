@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { defaultsOf, fit } from '@/lab/controls';
 import { newShape, type ShapeDoc } from './shape';
-import { FilterList, ShadowList, ShapeSection, StrokeList } from './Appearance';
+import { EffectList, FilterList, ShapeSection, StrokeList } from './Appearance';
 import {
   primaryFill,
   type Frame,
@@ -98,9 +98,9 @@ export default function Inspector({
         onStrokes={(strokes) => patch({ strokes })}
         types={types}
       />
-      <ShadowList
-        shadows={layer.shadows}
-        onShadows={(shadows) => patch({ shadows })}
+      <EffectList
+        effects={layer.effects}
+        onEffects={(effects) => patch({ effects })}
       />
       <FilterList
         filters={layer.filters}
@@ -362,9 +362,10 @@ export function FolderInspector({
           })
         }
       />
-      <ShadowList
-        shadows={folder.shadows ?? []}
-        onShadows={(shadows) => onPatch({ shadows })}
+      <EffectList
+        effects={folder.effects ?? []}
+        onEffects={(effects) => onPatch({ effects })}
+        shadowsOnly
       />
       <FilterList
         filters={folder.filters ?? []}

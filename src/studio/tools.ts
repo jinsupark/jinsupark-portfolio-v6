@@ -24,6 +24,7 @@ import {
   type P,
   type ShapeDoc,
   type ShapeKind,
+  nearLine,
 } from './shape';
 
 export type Tool =
@@ -98,6 +99,13 @@ export function hitLayer(layers: LayerDoc[], p: P) {
     if (!l.visible || l.locked) continue;
     const q = toLocal(l.frame, p);
     const { w, h } = l.frame;
+    // An open path is picked near its line (and its borders), not inside.
+    if (l.shape?.open) {
+      const reach = 8 + Math.max(0, ...l.strokes.map((s) => s.width / 2));
+      const line = flatten(verticesOf(l.shape, w, h), w, h, 400, true);
+      if (nearLine(line, q, reach)) return l;
+      continue;
+    }
     if (q.x < 0 || q.y < 0 || q.x > w || q.y > h) continue;
     if (!l.shape || contains(flatten(verticesOf(l.shape, w, h), w, h, 400), q))
       return l;

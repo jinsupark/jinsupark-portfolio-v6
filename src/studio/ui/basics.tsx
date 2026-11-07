@@ -1,7 +1,7 @@
 import { RotateCcw } from 'lucide-react';
 import { Children, useEffect, useRef, useState } from 'react';
 import { type Control } from '@/lab/controls';
-import { FIELD, sentence, digitsOf, rangeOf } from './shared';
+import { FIELD, sentence, digitsOf, nudgeOf, rangeOf } from './shared';
 
 // A titled block, always open.
 export function Section({
@@ -222,7 +222,10 @@ export function NumberField({
           if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
             e.preventDefault();
             const d = (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1);
-            const next = Math.min(max, Math.max(min, value + d * step));
+            const next = Math.min(
+              max,
+              Math.max(min, value + d * nudgeOf(min, max, factor)),
+            );
             set(next);
             setDraft((next * factor).toFixed(digitsOf(step * factor)));
           }

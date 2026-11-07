@@ -287,6 +287,16 @@ Home with a short about and contact links.
 - **UI kit** is `src/studio/ui/`: basics, menu, popover, color, rows, list and shared,
  re-exported by `index.ts`. Lists of items (Border, Shadow, Filters, Shape) share `ItemList`
  in `Appearance.tsx`.
+- **Effects** (`EffectDoc` in `layer.effects`, and on folders, which only get drop shadows):
+ Drop shadow, Inner shadow and Paper fibres, each in one colour (`EFFECTS` in
+ `studioSchemas.ts`).
+ - Fibres draw as wobbling bands over the borders (`bandsOf` in the compositor).
+ - The inner shadow is `OP.inner`, run after the cut.
+ - Older `shadows` and fibre borders convert in `withLists`.
+- **Border joins:** `StrokeDoc.join` is miter, round or bevel; absent means round, how older
+ borders drew. Miter turns into bevel below `miterAngle`. Sharp joins apply only to sharp convex
+ outlines (`cornersOf`), using edge and bevel lines in `STACK_FRAG`. Curves, concave outlines
+ and torn edges stay round.
 - **Undo** lives in `useHistory.ts`.
 - **Tests:** `npm test` (vitest) covers geometry, paints and folders. A rendering change
  should still get a `field-notes` pixel comparison.

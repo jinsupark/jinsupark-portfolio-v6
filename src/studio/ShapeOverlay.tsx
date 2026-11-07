@@ -1,6 +1,12 @@
 import { CornerUpRight, Spline, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { DESIGN, type Frame, type LayerDoc, type Size } from './document';
+import {
+  boundsOf,
+  DESIGN,
+  type Frame,
+  type LayerDoc,
+  type Size,
+} from './document';
 import {
   densify,
   flatten,
@@ -29,20 +35,58 @@ import {
   type Brush,
   type Tool,
 } from './tools';
+import { canvasBox, snapMove, type Guide } from './snapping';
 import { IconButton } from './ui';
 
 const SMEAR_SPACING = 6;
 const HIT = 10; // design units, for picking vertices and segments
 
-const pathTo = (pts: P[]) =>
+const pathTo = (pts: P[], open = false) =>
   pts.length
-    ? `M${pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('L')}Z`
+    ? `M${pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('L')}${open ? '' : 'Z'}`
     : '';
+
+// A node on a path, like the selection box's handles: a small white square
+// (round for a smooth point) with a blue edge, the same size on screen at any
+// zoom (zero-length strokes that don't scale); filled blue when picked.
+function Node({
+  p,
+  round = false,
+  picked = false,
+  size = 9,
+  ...rest
+}: {
+  p: P;
+  round?: boolean;
+  picked?: boolean;
+  size?: number;
+} & React.SVGProps<SVGGElement>) {
+  const d = `M${p.x},${p.y}h0`;
+  const cap = round ? 'round' : 'square';
+  return (
+    <g {...rest}>
+      <path
+        d={d}
+        stroke="#0ea5e9"
+        strokeWidth={size}
+        strokeLinecap={cap}
+        vectorEffect="non-scaling-stroke"
+      />
+      <path
+        d={d}
+        stroke={picked ? '#0ea5e9' : '#ffffff'}
+        strokeWidth={size - 3}
+        strokeLinecap={cap}
+        vectorEffect="non-scaling-stroke"
+      />
+    </g>
+  );
+}
 
 function outlineIn(l: LayerDoc): P[] {
   const { w, h } = l.frame;
-  return flatten(verticesOf(shapeOf(l), w, h), w, h, 400).map((q) =>
-    toArtwork(l.frame, q),
+  return flatten(verticesOf(shapeOf(l), w, h), w, h, 400, l.shape?.open).map(
+    (q) => toArtwork(l.frame, q),
   );
 }
 
@@ -59,7 +103,11 @@ type Gesture =
       frame: Frame;
       list: ReturnType<typeof unpack>;
       shape: ShapeDoc;
+      // Every point a point drag moves: the picked ones, if it was one.
+      group: number[];
     }
+  // A box dragged out in point editing to pick the points inside it.
+  | { kind: 'nodes'; at: P; to: P; add: boolean }
   | { kind: 'smear'; frame: Frame; pts: P[]; last: P; shape: ShapeDoc }
   // A box dragged out to select what it touches; a click if it barely moved.
   // `base` is what stays selected under it (shift-drag adds to a selection).
@@ -135,6 +183,8 @@ export default function ShapeOverlay({
   onDone,
   onDuplicate,
   onDuplicateMany,
+  guides = [],
+  onGuides,
   size = DESIGN,
 }: {
   tool: Tool;
@@ -146,7 +196,9 @@ export default function ShapeOverlay({
   selection: string[];
   // A layer hovered in the layer list, outlined here too.
   hovered?: string | null;
-  onCreate: (tool: Tool, frame: Frame, shape: ShapeDoc) => void;
+  // `tool` is what drew it; 'line' is a pen line kept when leaving the pen,
+  // which goes back to selecting rather than on to its points.
+  onCreate: (tool: Tool | 'line', frame: Frame, shape: ShapeDoc) => void;
   onPatch: (id: string, patch: Partial<LayerDoc>) => void;
   // Leave point editing (back to the select tool).
   onDone?: () => void;
@@ -156,12 +208,19 @@ export default function ShapeOverlay({
   // ⌥-drag on a selection: copies every selected layer in place, selects the
   // copies, and gives each copy's id and frame.
   onDuplicateMany?: () => [string, Frame][];
+  // Red alignment guides to draw, and where to report them while a layer is
+  // dragged.
+  guides?: Guide[];
+  onGuides?: (g: Guide[]) => void;
   size?: Size;
 }) {
   const svg = useRef<SVGSVGElement>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [hover, setHover] = useState<P | null>(null);
-  const [picked, setPicked] = useState<number | null>(null);
+  // The picked points, in the order picked; the last is the one the point
+  // toolbar's corner/smooth buttons act on.
+  const [picks, setPicks] = useState<number[]>([]);
+  const picked = picks.at(-1) ?? null;
   // Where the canvas is on screen, for the point toolbar along its top.
   const [canvasTop, setCanvasTop] = useState<{ x: number; y: number } | null>(
     null,
@@ -182,26 +241,49 @@ export default function ShapeOverlay({
   // The pen's points so far (artwork units, handles relative to each point).
   const [anchors, setAnchors] = useState<{ p: P; i: P; o: P }[]>([]);
   const [penTool, setPenTool] = useState(tool);
+  // A line left unfinished when the tool changes (V, or the rail) is kept, as
+  // an open line; it's handed on once rendered.
+  const [leftover, setLeftover] = useState<typeof anchors | null>(null);
   if (penTool !== tool) {
     setPenTool(tool);
+    if (penTool === 'bezier' && anchors.length >= 2) setLeftover(anchors);
     setAnchors([]);
   }
-  const finishPen = (pts = anchors) => {
-    if (pts.length >= 3) {
+  const made = useRef<typeof anchors | null>(null);
+  useEffect(() => {
+    if (!leftover || made.current === leftover) return;
+    made.current = leftover;
+    const r = refit({ x: 0, y: 0, w: 1, h: 1, rot: 0 }, leftover);
+    onCreate('line', r.frame, {
+      ...newShape('path'),
+      path: r.path,
+      open: true,
+    });
+  });
+  // Closed (the first point clicked again) is a shape; otherwise, with Enter,
+  // an open line.
+  // `then` 'edit' goes on to its points (Enter); 'line' back to selecting (Esc).
+  const finishPen = (close: boolean, then: 'bezier' | 'line' = 'bezier') => {
+    if (anchors.length >= (close ? 3 : 2)) {
       // An unrotated unit frame at the origin: its local units are artwork's.
-      const r = refit({ x: 0, y: 0, w: 1, h: 1, rot: 0 }, pts);
-      onCreate('bezier', r.frame, { ...newShape('path'), path: r.path });
+      const r = refit({ x: 0, y: 0, w: 1, h: 1, rot: 0 }, anchors);
+      onCreate(then, r.frame, {
+        ...newShape('path'),
+        path: r.path,
+        ...(!close && { open: true }),
+      });
     }
     setAnchors([]);
   };
-  // Enter closes the pen's shape; Backspace takes its last point back.
+  // Enter finishes the pen's line, open; Backspace takes its last point back.
   useEffect(() => {
     if (tool !== 'bezier' || !anchors.length) return;
     const key = (e: KeyboardEvent) => {
       if (typing(e)) return;
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' || e.key === 'Escape') {
         e.preventDefault();
-        finishPen();
+        e.stopImmediatePropagation();
+        finishPen(false, e.key === 'Enter' ? 'bezier' : 'line');
       } else if (e.key === 'Backspace' || e.key === 'Delete') {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -231,9 +313,10 @@ export default function ShapeOverlay({
     const key = (e: KeyboardEvent) => {
       if (typing(e)) return;
       if (e.key !== 'Backspace' && e.key !== 'Delete') return;
-      if (verts.length <= 3) return;
+      const least = layer.shape?.open ? 2 : 3;
+      if (verts.length - picks.length < least) return;
       e.preventDefault();
-      const path = verts.filter((_, i) => i !== picked);
+      const path = verts.filter((_, i) => !picks.includes(i));
       const { frame, path: next } = refit(
         layer.frame,
         unpack(path, layer.frame.w, layer.frame.h),
@@ -242,7 +325,7 @@ export default function ShapeOverlay({
         frame,
         shape: { ...shapeOf(layer), kind: 'path', path: next },
       });
-      setPicked(null);
+      setPicks([]);
     };
     addEventListener('keydown', key);
     return () => removeEventListener('keydown', key);
@@ -321,7 +404,7 @@ export default function ShapeOverlay({
         anchors.length >= 3 &&
         Math.hypot(p.x - first.p.x, p.y - first.p.y) < 8 * px
       ) {
-        finishPen();
+        finishPen(true);
         return;
       }
       setAnchors((a) => [...a, { p, i: { x: 0, y: 0 }, o: { x: 0, y: 0 } }]);
@@ -329,6 +412,10 @@ export default function ShapeOverlay({
       return;
     }
     if (!layer) return;
+    if (editing) {
+      setGesture({ kind: 'nodes', at: p, to: p, add: e.shiftKey });
+      return;
+    }
     const { frame } = layer;
     const shape = shapeOf(layer);
     if (tool === 'smear') {
@@ -358,7 +445,15 @@ export default function ShapeOverlay({
     (e.currentTarget as SVGElement).ownerSVGElement!.setPointerCapture(
       e.pointerId,
     );
-    setPicked(i);
+    // Shift toggles a point in the picks; pressing a picked point keeps them
+    // all, so the drag moves them together.
+    let group = [i];
+    if (part === 'p' && e.shiftKey) {
+      group = picks.includes(i) ? picks.filter((k) => k !== i) : [...picks, i];
+      setPicks(group);
+      if (!group.includes(i)) return;
+    } else if (part === 'p' && picks.includes(i)) group = picks;
+    else setPicks([i]);
     setGesture({
       kind: 'vertex',
       i,
@@ -367,6 +462,7 @@ export default function ShapeOverlay({
       frame,
       shape: shapeOf(layer),
       list: unpack(verts, frame.w, frame.h),
+      group,
     });
   };
 
@@ -398,21 +494,35 @@ export default function ShapeOverlay({
         );
       return;
     }
-    if (g.kind === 'grabMany') {
-      const dx = Math.round(p.x - g.at.x);
-      const dy = Math.round(p.y - g.at.y);
-      for (const [id, f] of g.frames)
-        onPatch(id, { frame: { ...f, x: f.x + dx, y: f.y + dy } });
-      return;
-    }
-    if (g.kind === 'grab') {
-      onPatch(g.id, {
-        frame: {
-          ...g.frame,
-          x: Math.round(g.frame.x + p.x - g.at.x),
-          y: Math.round(g.frame.y + p.y - g.at.y),
-        },
-      });
+    if (g.kind === 'grab' || g.kind === 'grabMany') {
+      const frames: [string, Frame][] =
+        g.kind === 'grab' ? [[g.id, g.frame]] : g.frames;
+      let dx = p.x - g.at.x;
+      let dy = p.y - g.at.y;
+      // Snap the moved box's edges and centre to the other layers' and the
+      // canvas's, showing red guides; ⌘ moves freely.
+      if (!e.metaKey) {
+        const ids = new Set(frames.map(([id]) => id));
+        const targets = [
+          ...layers
+            .filter((l) => l.visible && !ids.has(l.id))
+            .map((l) => boundsOf([l.frame])!),
+          canvasBox(size),
+        ];
+        const box = boundsOf(
+          frames.map(([, f]) => ({ ...f, x: f.x + dx, y: f.y + dy })),
+        )!;
+        const unit =
+          size.w / (svg.current?.getBoundingClientRect().width || size.w);
+        const sn = snapMove(box, targets, 6 * unit);
+        dx += sn.dx;
+        dy += sn.dy;
+        onGuides?.(sn.guides);
+      } else onGuides?.([]);
+      for (const [id, f] of frames)
+        onPatch(id, {
+          frame: { ...f, x: Math.round(f.x + dx), y: Math.round(f.y + dy) },
+        });
       return;
     }
     if (g.kind === 'draw') {
@@ -429,12 +539,18 @@ export default function ShapeOverlay({
       const last = g.pts.at(-1)!;
       if (Math.hypot(p.x - last.x, p.y - last.y) > 2)
         setGesture({ ...g, pts: [...g.pts, p] });
+    } else if (g.kind === 'nodes') {
+      setGesture({ ...g, to: p });
     } else if (g.kind === 'vertex' && layer) {
       const q = toLocal(g.frame, p);
       const list = g.list.map((v) => ({ ...v }));
       const v = list[g.i];
-      if (g.part === 'p') v.p = q;
-      else {
+      if (g.part === 'p') {
+        const dx = q.x - g.list[g.i].p.x;
+        const dy = q.y - g.list[g.i].p.y;
+        for (const k of g.group)
+          list[k].p = { x: g.list[k].p.x + dx, y: g.list[k].p.y + dy };
+      } else {
         const off = { x: q.x - v.p.x, y: q.y - v.p.y };
         const other = g.part === 'i' ? 'o' : 'i';
         v[g.part] = off;
@@ -491,6 +607,19 @@ export default function ShapeOverlay({
     const g = gesture;
     setGesture(null);
     if (!g) return;
+    if (g.kind === 'grab' || g.kind === 'grabMany') onGuides?.([]);
+    if (g.kind === 'nodes' && layer) {
+      const x0 = Math.min(g.at.x, g.to.x);
+      const x1 = Math.max(g.at.x, g.to.x);
+      const y0 = Math.min(g.at.y, g.to.y);
+      const y1 = Math.max(g.at.y, g.to.y);
+      const inside = verts.flatMap((v, i) => {
+        const q = art(v);
+        return q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1 ? [i] : [];
+      });
+      setPicks(g.add ? [...new Set([...picks, ...inside])] : inside);
+      return;
+    }
     if (g.kind === 'marquee') {
       const ids = boxed(g);
       if (!ids) onSelect(g.hit, g.add);
@@ -532,7 +661,7 @@ export default function ShapeOverlay({
         path: splitAt(verts, n.i, n.t),
       },
     });
-    setPicked(n.i + 1);
+    setPicks([n.i + 1]);
   };
 
   const g = gesture;
@@ -544,7 +673,7 @@ export default function ShapeOverlay({
     (tool === 'select' && !gesture && hover ? hitLayer(layers, hover) : null);
   const hoverPath =
     hoverLayer && !selection.includes(hoverLayer.id)
-      ? pathTo(outlineIn(hoverLayer))
+      ? pathTo(outlineIn(hoverLayer), hoverLayer.shape?.open)
       : '';
   const art = (v: Vertex, dx = 0, dy = 0) =>
     toArtwork(layer!.frame, {
@@ -585,18 +714,18 @@ export default function ShapeOverlay({
     const { frame } = layer;
     const shape = shapeOf(layer);
     if (how === 'delete') {
-      if (verts.length <= 3) return;
+      if (verts.length - picks.length < (shape.open ? 2 : 3)) return;
       writePath(
         layer.id,
         frame,
         shape,
         unpack(
-          verts.filter((_, i) => i !== picked),
+          verts.filter((_, i) => !picks.includes(i)),
           frame.w,
           frame.h,
         ),
       );
-      setPicked(null);
+      setPicks([]);
       return;
     }
     const v = verts[picked];
@@ -660,9 +789,35 @@ export default function ShapeOverlay({
             pointerEvents="none"
           />
         )}
+        {guides.map((l, k) => (
+          <line
+            key={k}
+            x1={l.x1}
+            y1={l.y1}
+            x2={l.x2}
+            y2={l.y2}
+            stroke="#ff3b30"
+            strokeWidth={1}
+            vectorEffect="non-scaling-stroke"
+            pointerEvents="none"
+          />
+        ))}
+        {g?.kind === 'nodes' && (
+          <rect
+            x={Math.min(g.at.x, g.to.x)}
+            y={Math.min(g.at.y, g.to.y)}
+            width={Math.abs(g.to.x - g.at.x)}
+            height={Math.abs(g.to.y - g.at.y)}
+            fill="rgba(14,165,233,0.08)"
+            stroke="#0ea5e9"
+            strokeWidth={1}
+            vectorEffect="non-scaling-stroke"
+            pointerEvents="none"
+          />
+        )}
         {sel.length > 0 && tool !== 'select' && (
           <path
-            d={pathTo(sel)}
+            d={pathTo(sel, layer?.shape?.open)}
             fill="none"
             stroke="#0ea5e9"
             strokeWidth={1}
@@ -703,17 +858,12 @@ export default function ShapeOverlay({
               ) : null;
             })()}
             {anchors.map((v, k) => (
-              <rect
+              <Node
                 key={k}
-                x={v.p.x}
-                y={v.p.y}
-                width={1}
-                height={1}
-                fill={k === 0 && anchors.length >= 3 ? '#0ea5e9' : '#ffffff'}
-                stroke="#0ea5e9"
-                strokeWidth={8}
-                strokeLinejoin="round"
-                vectorEffect="non-scaling-stroke"
+                p={v.p}
+                round={!!(v.o.x || v.o.y)}
+                // The first point, once clicking it would close the shape.
+                picked={k === 0 && anchors.length >= 3}
               />
             ))}
           </g>
@@ -734,7 +884,13 @@ export default function ShapeOverlay({
             const smooth = v.ix || v.iy || v.ox || v.oy;
             const hi = art(v, v.ix, v.iy);
             const ho = art(v, v.ox, v.oy);
-            const showHandles = smooth && (picked === i || verts.length <= 24);
+            // Handles too short to grab sit on the point and only clutter it.
+            const long = (dx: number, dy: number) =>
+              Math.hypot(dx * layer!.frame.w, dy * layer!.frame.h) > 6;
+            const showHandles =
+              smooth &&
+              (long(v.ix, v.iy) || long(v.ox, v.oy)) &&
+              (picks.includes(i) || verts.length <= 24);
             return (
               <g key={i}>
                 {showHandles &&
@@ -755,26 +911,18 @@ export default function ShapeOverlay({
                         vectorEffect="non-scaling-stroke"
                         pointerEvents="none"
                       />
-                      <circle
-                        cx={h.x}
-                        cy={h.y}
-                        r={4}
-                        fill="#ffffff"
-                        stroke="#0ea5e9"
-                        vectorEffect="non-scaling-stroke"
+                      <Node
+                        p={h}
+                        round
+                        size={8}
                         onPointerDown={(e) => grab(e, i, part)}
                       />
                     </g>
                   ))}
-                <rect
-                  x={p.x - 4.5}
-                  y={p.y - 4.5}
-                  width={9}
-                  height={9}
-                  rx={smooth ? 4.5 : 0}
-                  fill={picked === i ? '#0ea5e9' : '#ffffff'}
-                  stroke="#0ea5e9"
-                  vectorEffect="non-scaling-stroke"
+                <Node
+                  p={p}
+                  round={!!smooth}
+                  picked={picks.includes(i)}
                   className="cursor-move"
                   onPointerDown={(e) => grab(e, i, 'p')}
                 />

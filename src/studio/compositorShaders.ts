@@ -122,15 +122,18 @@ precision highp float;
 uniform sampler2D uPts;
 uniform int uCount;
 uniform vec4 uDomain;
+// An open path: no segment back to the start, and no inside.
+uniform int uOpen;
 in vec2 vUv;
 out vec4 outColor;
 void main() {
   vec2 q = uDomain.xy + vec2(vUv.x, 1.0 - vUv.y) * uDomain.zw;
   float d = 1e12;
   int wn = 0;
-  vec2 a = texelFetch(uPts, ivec2(uCount - 1, 0), 0).xy;
+  vec2 a = texelFetch(uPts, ivec2(uOpen == 1 ? 0 : uCount - 1, 0), 0).xy;
   for (int i = 0; i < 4096; i++) {
     if (i >= uCount) break;
+    if (uOpen == 1 && i == 0) continue;
     vec2 b = texelFetch(uPts, ivec2(i, 0), 0).xy;
     vec2 e = b - a;
     vec2 w = q - a;
@@ -142,7 +145,7 @@ void main() {
     else if (b.y <= q.y && c < 0.0) wn--;
     a = b;
   }
-  outColor = vec4((wn != 0 ? -1.0 : 1.0) * sqrt(d), 0.0, 0.0, 1.0);
+  outColor = vec4((wn != 0 && uOpen == 0 ? -1.0 : 1.0) * sqrt(d), 0.0, 0.0, 1.0);
 }`;
 
 // A layer's whole outline as a distance at every artwork pixel: its shape (a
@@ -270,9 +273,24 @@ uniform float uTearScale;
 uniform float uSeed;
 uniform float uOpacity;
 uniform int uBlend;
+// A border's join on a sharp convex outline: each edge's line and each
+// corner's bevel line (scaled so all read as distance past the outline).
+uniform int uJoin;
+uniform int uEdgeCount;
+uniform vec3 uEdges[32];
+uniform vec4 uBevels[32];
 in vec2 vUv;
 out vec4 outColor;
 ${COMMON}
+float joinDist(vec2 p) {
+  float m = -1e9;
+  for (int i = 0; i < 32; i++) {
+    if (i >= uEdgeCount) break;
+    m = max(m, dot(uEdges[i].xy, p) + uEdges[i].z);
+    if (uBevels[i].w > 0.5) m = max(m, dot(uBevels[i].xy, p) + uBevels[i].z);
+  }
+  return m;
+}
 vec4 readInput(vec2 q) {
   return uInput == 1 ? vec4(atArt(uBase, q, uView).rgb, 1.0) : atArt(uPrev, q, uView);
 }
@@ -283,7 +301,7 @@ void main() {
   vec2 l = toLocal(p, uFrame, uRot);
   float d = texture(uDist, vUv).r;
   float aa = max(fwidth(d), 1e-3) * 0.7;
-  bool replace = (uOp >= 1 && uOp <= 7 && uInput == 0) || uOp == 8;
+  bool replace = (uOp >= 1 && uOp <= 7 && uInput == 0) || uOp == 8 || uOp == 13;
   vec4 s;
   if (uOp == 0) {
     vec2 fl = uSrcSpace == 1 ? p / uDesign
@@ -301,8 +319,18 @@ void main() {
       ? smoothstep(uFeather * 0.5 + aa, -uFeather * 0.5 - aa, d)
       : smoothstep(aa, -aa, d);
     s = vec4(prev.rgb, prev.a * body);
+  } else if (uOp == 13) {
+    // Inner shadow: the outline, offset and softened, darkening the inside
+    // near the edge. uGrid.xy is the offset, uWidth the blur, uOffset the
+    // spread, uAmount the opacity.
+    float ds = atArt(uDist, p - uGrid.xy, uView).r + uOffset;
+    float a = smoothstep(0.0, 1.0, 1.0 + ds / max(uWidth, 0.5));
+    s = vec4(mix(prev.rgb, uInk, clamp(a * uAmount, 0.0, 1.0)), prev.a);
   } else if (uOp == 9) {
     float w = uWidth;
+    // Mitred or bevelled corners: outside a sharp convex outline, distance
+    // to its edge lines (and corner cuts) rather than to the outline.
+    if (uJoin == 1 && d > 0.0) d = joinDist(p);
     if (uFibers > 0.0) {
       float fib = fbm(l * uFrame.zw * uTearScale * 3.1 + uSeed * 3.7 + 31.0);
       w *= max(0.05, 1.0 + (fib - 0.5) * 2.0 * uFibers);
@@ -322,6 +350,11 @@ void main() {
       float reach = max(-lo, 0.0);
       float fw = max(fwidth(inward), 1e-4);
       s.a *= smoothstep(reach + fw, reach - fw, inward);
+      // And no longer than that edge: cut square at the frame's corners.
+      float along = uSide <= 2 ? px.x : px.y;
+      float span = uSide <= 2 ? uFrame.z : uFrame.w;
+      float fa = max(fwidth(along), 1e-4);
+      s.a *= smoothstep(-fa, fa, along) * smoothstep(span + fa, span - fa, along);
     }
   } else {
     s = readInput(p);

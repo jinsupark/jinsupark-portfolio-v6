@@ -16,10 +16,13 @@ import {
   boundsOf,
   chainOf,
   DESIGN,
+  effectType,
   sizeOf,
+  solidFill,
   layersIn,
   plainFolder,
   type Artwork,
+  type EffectDoc,
   type FillDoc,
   type GroupDoc,
   type Frame,
@@ -28,7 +31,7 @@ import {
   type StrokeDoc,
 } from './document';
 import type { LayerInstance, LayerType } from './layer';
-import { flatten, verticesOf, type ShapeDoc } from './shape';
+import { cornersOf, flatten, verticesOf, type ShapeDoc } from './shape';
 import { combineSchema, FILTERS, OUTLINES } from './studioSchemas';
 
 type Pair = [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget];
@@ -53,13 +56,57 @@ const OP = {
   grain: 10,
   vignette: 11,
   water: 12,
+  inner: 13,
 } as const;
 const ALIGN = ['inside', 'center', 'outside'];
 const blendOf = (b: string) =>
   Math.max(0, BLEND_MODES.indexOf(b as (typeof BLEND_MODES)[number]));
 
-// How much a stroke's width wobbles: only paper fibres do.
-const fibresOf = (s: StrokeDoc) => (s.type === 'fibres' ? s.fibers : 0);
+// The bands drawn along a layer's edge: its borders, then its paper-fibre
+// effects (one-colour wobbling bands, inside unless set otherwise) over them.
+// Kept per layer object so a fibres band's paint stays the same object while
+// the layer does.
+type Band = StrokeDoc & { fibers: number };
+const bandCache = new WeakMap<LayerDoc, Band[]>();
+function bandsOf(l: LayerDoc): Band[] {
+  let b = bandCache.get(l);
+  if (!b) {
+    b = [
+      ...l.strokes.map((s) => ({ ...s, fibers: 0 })),
+      ...l.effects
+        .filter((e) => effectType(e) === 'fibres')
+        .map((e): Band => ({
+          id: e.id,
+          visible: e.visible,
+          width: e.width ?? 12,
+          align: e.align ?? 'inside',
+          offset: e.offset ?? 0,
+          sides: e.sides,
+          fibers: e.fibers ?? 0.6,
+          opacity: e.opacity,
+          blend: 'normal',
+          fills: [solidFill(e.color, `${e.id}-fill`)],
+        })),
+    ];
+    bandCache.set(l, b);
+  }
+  return b;
+}
+const SIDES = ['all', 'top', 'bottom', 'left', 'right'];
+
+// What one frame's passes share.
+type FrameCtx = {
+  doc: Artwork;
+  view: Frame;
+  scale: number;
+  dt: number;
+  // Mask sources' finished fills, by layer id.
+  matte: Map<string, THREE.Texture>;
+};
+type OpenFolder = { g: GroupDoc | null; pair: Pair; own: boolean };
+
+const shadowsOf = (effects: EffectDoc[] | undefined, type: string) =>
+  (effects ?? []).filter((e) => e.visible && effectType(e) === type);
 
 // How far past the frame a layer can draw: the field has to reach as far as
 // the furthest stroke or shadow does.
@@ -105,15 +152,17 @@ function outlineSum(l: LayerDoc): Outline {
 function padOf(l: LayerDoc) {
   const e = outlineSum(l);
   let reach = 0;
-  for (const s of l.strokes) {
+  for (const s of bandsOf(l)) {
     if (!s.visible) continue;
-    const w = s.width * (1 + fibresOf(s));
+    const w = s.width * (1 + s.fibers);
     const out = s.align === 'outside' ? w : s.align === 'center' ? w / 2 : 0;
     reach = Math.max(reach, out + Math.max(0, s.offset));
   }
-  for (const s of l.shadows)
-    if (s.visible)
-      reach = Math.max(reach, Math.abs(s.x) + Math.abs(s.y) + s.blur);
+  for (const s of shadowsOf(l.effects, 'drop'))
+    reach = Math.max(
+      reach,
+      Math.abs(s.x) + Math.abs(s.y) + s.blur + Math.max(0, s.spread ?? 0),
+    );
   return 24 + e.tear * 1.5 + e.feather + reach;
 }
 
@@ -219,6 +268,10 @@ export class Compositor {
     uOffset: { value: 0 },
     uFibers: { value: 0 },
     uSide: { value: 0 },
+    uJoin: { value: 0 },
+    uEdgeCount: { value: 0 },
+    uEdges: { value: Array.from({ length: 32 }, () => new THREE.Vector3()) },
+    uBevels: { value: Array.from({ length: 32 }, () => new THREE.Vector4()) },
     uGrainPx: { value: 1 },
     uTime: { value: 0 },
     uTearScale: { value: 0.06 },
@@ -284,6 +337,7 @@ export class Compositor {
   private sdfPass = pass(SDF_FRAG, {
     uPts: { value: this.pts },
     uCount: { value: 0 },
+    uOpen: { value: 0 },
     uDomain: { value: new THREE.Vector4() },
   });
 
@@ -405,7 +459,7 @@ export class Compositor {
     this.size = sizeOf(doc);
     const fills = new Map(
       doc.layers
-        .flatMap((l) => [...l.fills, ...l.strokes.flatMap((s) => s.fills)])
+        .flatMap((l) => [...l.fills, ...bandsOf(l).flatMap((s) => s.fills)])
         .map((f) => [f.id, f]),
     );
     for (const [id, e] of this.instances) {
@@ -445,7 +499,7 @@ export class Compositor {
   private outlineOf(s: ShapeDoc, w: number, h: number) {
     const c = this.outlines.get(s);
     if (c && c.w === w && c.h === h) return c.pts;
-    const pts = flatten(verticesOf(s, w, h), w, h, 1200);
+    const pts = flatten(verticesOf(s, w, h), w, h, 1200, s.open);
     this.outlines.set(s, { w, h, pts });
     return pts;
   }
@@ -464,7 +518,8 @@ export class Compositor {
     if (s && s.shape === l.shape && s.w === w && s.h === h && s.pad === pad)
       return { tex: s.rt.texture, mode: 1, pad };
     const pts = this.outlineOf(l.shape, w, h);
-    if (pts.length < 3) return { tex: this.blank, mode: 0, pad };
+    if (pts.length < (l.shape.open ? 2 : 3))
+      return { tex: this.blank, mode: 0, pad };
     const dw = w + 2 * pad;
     const dh = h + 2 * pad;
     const k = SDF_MAX_PX / Math.max(dw, dh);
@@ -483,6 +538,7 @@ export class Compositor {
     }
     this.pts.needsUpdate = true;
     this.sdfPass.uniforms.uCount.value = n;
+    this.sdfPass.uniforms.uOpen.value = l.shape.open ? 1 : 0;
     this.sdfPass.uniforms.uDomain.value.set(-pad, -pad, dw, dh);
     this.draw(this.sdfPass, s.rt);
     return { tex: s.rt.texture, mode: 1, pad };
@@ -499,6 +555,62 @@ export class Compositor {
       pts: { x: number; y: number }[];
     }
   >();
+  // A border's join: mitred or bevelled corners need the outline's corners
+  // (a sharp convex one); anything else, or a round join, is the field's own.
+  private joinFor(
+    u: Record<string, THREE.IUniform>,
+    st: StrokeDoc,
+    corners: { x: number; y: number }[] | null,
+  ) {
+    const join = st.join ?? 'round';
+    u.uJoin.value = 0;
+    if (join === 'round' || !corners || st.align === 'inside') return;
+    const n = corners.length;
+    const cx = corners.reduce((a, p) => a + p.x, 0) / n;
+    const cy = corners.reduce((a, p) => a + p.y, 0) / n;
+    const normals = corners.map((a, i) => {
+      const b = corners[(i + 1) % n];
+      let nx = b.y - a.y;
+      let ny = -(b.x - a.x);
+      const len = Math.hypot(nx, ny) || 1;
+      nx /= len;
+      ny /= len;
+      if (nx * ((a.x + b.x) / 2 - cx) + ny * ((a.y + b.y) / 2 - cy) < 0) {
+        nx = -nx;
+        ny = -ny;
+      }
+      return { x: nx, y: ny };
+    });
+    const limit = ((st.miterAngle ?? 28.96) * Math.PI) / 180;
+    corners.forEach((v, i) => {
+      const e = normals[i];
+      u.uEdges.value[i].set(
+        e.x,
+        e.y,
+        -(e.x * corners[i].x + e.y * corners[i].y),
+      );
+      // The corner at v sits between the previous edge and this one.
+      const a = normals[(i - 1 + n) % n];
+      let bx = a.x + e.x;
+      let by = a.y + e.y;
+      const bl = Math.hypot(bx, by) || 1;
+      bx /= bl;
+      by /= bl;
+      const cosHalf = Math.max(1e-3, a.x * bx + a.y * by);
+      // The corner's inside angle: π less the turn between the normals.
+      const inside = Math.PI - 2 * Math.acos(Math.min(1, cosHalf));
+      const bevel = join === 'bevel' || inside < limit;
+      u.uBevels.value[i].set(
+        bx / cosHalf,
+        by / cosHalf,
+        -(bx * v.x + by * v.y) / cosHalf,
+        bevel ? 1 : 0,
+      );
+    });
+    u.uEdgeCount.value = n;
+    u.uJoin.value = 1;
+  }
+
   private styleOutline(l: LayerDoc, pad: number) {
     const { w, h } = l.frame;
     const shape = l.shape;
@@ -832,7 +944,7 @@ export class Compositor {
       fills: [],
       filters: g.filters ?? [],
       strokes: [],
-      shadows: [],
+      effects: [],
       outline: [],
     };
   }
@@ -844,7 +956,46 @@ export class Compositor {
     const view = this.viewOf();
     // Pixels per design unit; layer textures are drawn at this, so zooming in
     // sharpens them (each capped by its own maximum size).
-    const scale = this.px.w / view.w;
+    const f: FrameCtx = {
+      doc,
+      view,
+      scale: this.px.w / view.w,
+      dt,
+      matte: new Map(),
+    };
+    this.passesTo(view);
+    this.fill.uniforms.uColor.value = rgb(doc.background);
+    this.draw(this.fill, this.targets[0]);
+    this.buildMattes(f);
+
+    // Folders open and close as the layers under them go by.
+    const stack: OpenFolder[] = [{ g: null, pair: this.targets, own: false }];
+    const { from, keepAt } = this.dragStart(f);
+    for (const [index, l] of doc.layers.entries()) {
+      if (index === keepAt) this.keepBelow();
+      if (index < from) continue;
+      const chain = chainOf(doc, l);
+      if (!l.visible || chain.some((g) => g.visible === false)) continue;
+      while (
+        stack.length > 1 &&
+        !chain.some((g) => g.id === stack[stack.length - 1].g?.id)
+      )
+        this.closeFolder(f, stack);
+      for (const g of chain)
+        if (!stack.some((o) => o.g?.id === g.id)) this.openFolder(f, stack, g);
+      this.drawLayer(f, l, stack[stack.length - 1].pair);
+    }
+    while (stack.length > 1) this.closeFolder(f, stack);
+    if (keepAt === doc.layers.length) this.keepBelow();
+
+    const p = this.post.uniforms;
+    p.uSrc.value = this.targets[0].texture;
+    p.uSurround.value = rgb(this.surround);
+    this.draw(this.post, null);
+  }
+
+  // Every pass maps its pixels onto the artwork through the view.
+  private passesTo(view: Frame) {
     for (const m of [
       this.distPass,
       this.stackPass,
@@ -856,18 +1007,17 @@ export class Compositor {
     }
     this.groupPass.uniforms.uView.value.set(view.x, view.y, view.w, view.h);
     this.clipTo(view);
-    const a = this.targets[0];
+  }
 
-    this.fill.uniforms.uColor.value = rgb(doc.background);
-    this.draw(this.fill, a);
-
-    // Layers used as masks build their fills first and keep them for the
-    // frame, even a hidden one, so a matte can be a layer you never see.
+  // Layers used as masks build their fills first and keep them for the
+  // frame, even a hidden one, so a matte can be a layer you never see.
+  private buildMattes(f: FrameCtx) {
+    const { doc } = f;
+    const base = this.targets[0].texture;
     const masks = new Set([
       ...doc.layers.map((l) => l.mask.source),
       ...(doc.groups ?? []).map((g) => g.mask?.source),
     ]);
-    const matte = new Map<string, THREE.Texture>();
     for (const l of doc.layers) {
       if (!masks.has(l.id)) continue;
       let pair = this.mattes.get(l.id);
@@ -875,166 +1025,185 @@ export class Compositor {
         pair = [target(this.px.w, this.px.h), target(this.px.w, this.px.h)];
         this.mattes.set(l.id, pair);
       }
-      this.prepare(l, a.texture);
-      const tex = this.fillsInto(l, pair, a.texture, scale, dt);
-      if (tex) matte.set(l.id, tex);
+      this.prepare(l, base);
+      const tex = this.fillsInto(l, pair, base, f.scale, f.dt);
+      if (tex) f.matte.set(l.id, tex);
     }
+  }
+
+  // A layer's or folder's mask, onto the pass that lays it.
+  private maskInto(
+    u: Record<string, THREE.IUniform>,
+    f: FrameCtx,
+    mask: LayerDoc['mask'] | undefined,
+    fallback: THREE.Texture,
+  ) {
+    const src = f.doc.layers.find((m) => m.id === mask?.source);
+    const mtex = src && f.matte.get(src.id);
+    u.uMaskMode.value = mtex ? (mask?.mode === 'luma' ? 2 : 1) : 0;
+    u.uMask.value = mtex ?? fallback;
+    u.uMaskInvert.value = !!mask?.invert;
+    if (!src) return;
+    // A mask covers wherever its fills were laid: the whole artwork for a
+    // canvas-space fill, otherwise its frame.
+    const whole = src.fills.some((x) => x.fillSpace === 'canvas');
+    u.uMaskFrame.value.set(
+      whole ? 0 : src.frame.x,
+      whole ? 0 : src.frame.y,
+      whole ? this.size.w : src.frame.w,
+      whole ? this.size.h : src.frame.h,
+    );
+    u.uMaskRot.value = whole ? 0 : (src.frame.rot * Math.PI) / 180;
+  }
+
+  // One layer onto `into`'s current content (the artwork, or a folder's
+  // layers so far): its fills, cut to its outline with its edge effects, then
+  // laid with its drop shadows, mask and blend.
+  private drawLayer(f: FrameCtx, l: LayerDoc, into: Pair) {
+    const base = into[0];
+    this.prepare(l, base.texture);
+    this.distanceOf(l, f.doc.layers);
+
+    // A matte's fills are reused unless a filter reads the artwork behind
+    // it, which only exists now.
+    const pair = this.build;
+    const behind = l.filters.some(
+      (x) => x.input === 'background' || x.type === 'water',
+    );
+    const kept = !behind && f.matte.get(l.id);
+    let tex = kept || this.fillsInto(l, pair, base.texture, f.scale, f.dt);
+    const bands = bandsOf(l).filter((x) => x.visible);
+    if (!tex && !bands.length) return;
+    if (!tex) {
+      this.clear(pair[0]);
+      tex = pair[0].texture;
+    }
+    if (!this.isStyled(l)) tex = this.edgeOf(f, l, pair, tex, bands);
 
     const u = this.layerPass.uniforms;
-    // One layer onto `into`'s current content (the artwork, or a folder's
-    // layers so far).
-    const drawLayer = (l: LayerDoc, into: Pair) => {
-      const base = into[0];
-      this.prepare(l, base.texture);
-      this.distanceOf(l, doc.layers);
+    u.uBase.value = base.texture;
+    u.uLayer.value = tex;
+    u.uDist.value = this.dist.texture;
+    const shadows = shadowsOf(l.effects, 'drop').slice(0, MAX_SHADOWS);
+    u.uShadows.value = shadows.length;
+    shadows.forEach((x, i) => {
+      u.uShadowGeo.value[i].set(x.x, x.y, x.blur, 0);
+      const c = rgb(x.color);
+      u.uShadowColor.value[i].set(c.x, c.y, c.z, x.opacity);
+    });
+    u.uOpacity.value = l.opacity;
+    u.uBlend.value = blendOf(l.blend);
+    this.maskInto(u, f, l.mask, tex);
+    this.draw(this.layerPass, into[1]);
+    into.reverse();
+  }
 
-      // A matte's fills are reused unless a filter reads the artwork behind
-      // it, which only exists now.
-      const pair = this.build;
-      const behind = l.filters.some(
-        (f) => f.input === 'background' || f.type === 'water',
-      );
-      const kept = !behind && matte.get(l.id);
-      let tex = kept || this.fillsInto(l, pair, base.texture, scale, dt);
-      const strokes = l.strokes.filter((x) => x.visible);
-      if (!tex && !strokes.length) return;
-      if (!tex) {
-        this.clear(pair[0]);
-        tex = pair[0].texture;
-      }
-
-      if (!this.isStyled(l)) {
-        // Kept to the outline, then the strokes laid along it.
-        const from = tex;
-        this.step(pair, (u) => {
-          u.uPrev.value = from;
-          u.uOp.value = OP.cut;
-        });
-        for (const st of strokes) {
-          this.clear(this.paint[0]);
-          if (!this.stackFills(l, st.fills, this.paint, scale, dt)) continue;
-          const paint = this.paint[0].texture;
-          this.step(pair, (u) => {
-            u.uOp.value = OP.stroke;
-            u.uSrc.value = paint;
-            u.uWidth.value = st.width;
-            u.uAlign.value = Math.max(0, ALIGN.indexOf(st.align));
-            u.uOffset.value = st.offset;
-            u.uFibers.value = fibresOf(st);
-            u.uSide.value = Math.max(
-              0,
-              ['all', 'top', 'bottom', 'left', 'right'].indexOf(
-                st.sides ?? 'all',
-              ),
-            );
-            u.uOpacity.value = st.opacity;
-            u.uBlend.value = blendOf(st.blend);
-          });
-        }
-        tex = pair[0].texture;
-      }
-
-      u.uBase.value = base.texture;
-      u.uLayer.value = tex;
-      u.uDist.value = this.dist.texture;
-      const shadows = l.shadows.filter((x) => x.visible).slice(0, MAX_SHADOWS);
-      u.uShadows.value = shadows.length;
-      shadows.forEach((x, i) => {
-        u.uShadowGeo.value[i].set(x.x, x.y, x.blur, 0);
-        const c = rgb(x.color);
-        u.uShadowColor.value[i].set(c.x, c.y, c.z, x.opacity);
+  // The fills kept to the outline, then the inner shadows, then the bands
+  // (borders, paper fibres) laid along it.
+  private edgeOf(
+    f: FrameCtx,
+    l: LayerDoc,
+    pair: Pair,
+    from: THREE.Texture,
+    bands: Band[],
+  ) {
+    this.step(pair, (u) => {
+      u.uPrev.value = from;
+      u.uOp.value = OP.cut;
+    });
+    for (const sh of shadowsOf(l.effects, 'inner'))
+      this.step(pair, (u) => {
+        u.uOp.value = OP.inner;
+        u.uGrid.value.set(sh.x, sh.y, 0, 0);
+        u.uWidth.value = sh.blur;
+        u.uOffset.value = sh.spread ?? 0;
+        u.uAmount.value = sh.opacity;
+        u.uInk.value.copy(rgb(sh.color));
+        u.uOpacity.value = 1;
+        u.uBlend.value = 0;
       });
-      u.uOpacity.value = l.opacity;
-      u.uBlend.value = blendOf(l.blend);
-      const src = doc.layers.find((m) => m.id === l.mask.source);
-      const mtex = src && matte.get(src.id);
-      u.uMaskMode.value = mtex ? (l.mask.mode === 'luma' ? 2 : 1) : 0;
-      u.uMask.value = mtex ?? tex;
-      if (src) {
-        // A mask covers wherever its fills were laid: the whole artwork for a
-        // canvas-space fill, otherwise its frame.
-        const whole = src.fills.some((x) => x.fillSpace === 'canvas');
-        u.uMaskFrame.value.set(
-          whole ? 0 : src.frame.x,
-          whole ? 0 : src.frame.y,
-          whole ? this.size.w : src.frame.w,
-          whole ? this.size.h : src.frame.h,
-        );
-        u.uMaskRot.value = whole ? 0 : (src.frame.rot * Math.PI) / 180;
-      }
-      u.uMaskInvert.value = l.mask.invert;
+    const corners =
+      !l.combine && !l.outline.some((o) => o.visible)
+        ? cornersOf(l.shape, l.frame)
+        : null;
+    for (const st of bands) {
+      this.clear(this.paint[0]);
+      if (!this.stackFills(l, st.fills, this.paint, f.scale, f.dt)) continue;
+      const paint = this.paint[0].texture;
+      this.step(pair, (u) => {
+        u.uOp.value = OP.stroke;
+        u.uSrc.value = paint;
+        u.uWidth.value = st.width;
+        u.uAlign.value = Math.max(0, ALIGN.indexOf(st.align));
+        u.uOffset.value = st.offset;
+        u.uFibers.value = st.fibers;
+        this.joinFor(u, st, corners);
+        u.uSide.value = Math.max(0, SIDES.indexOf(st.sides ?? 'all'));
+        u.uOpacity.value = st.opacity;
+        u.uBlend.value = blendOf(st.blend);
+      });
+    }
+    return pair[0].texture;
+  }
 
-      this.draw(this.layerPass, into[1]);
-      into.reverse();
-    };
+  // A plain folder draws straight into its parent; one with effects gets a
+  // buffer of its own (one per nesting level), laid onto its parent when it
+  // closes.
+  private openFolder(f: FrameCtx, stack: OpenFolder[], g: GroupDoc) {
+    const top = stack[stack.length - 1];
+    if (plainFolder(g)) {
+      stack.push({ g, pair: top.pair, own: false });
+      return;
+    }
+    const depth = stack.filter((o) => o.own).length;
+    const pair = (this.folders[depth] ??= [
+      target(this.px.w, this.px.h),
+      target(this.px.w, this.px.h),
+    ]);
+    this.clipTo(f.view);
+    this.clear(pair[0]);
+    stack.push({ g, pair, own: true });
+  }
 
-    // Folders open and close as the layers under them go by. A plain one draws
-    // straight into its parent; one with effects gets a buffer of its own,
-    // laid onto its parent when it closes.
-    type Open = { g: GroupDoc | null; pair: Pair; own: boolean };
-    const stack: Open[] = [{ g: null, pair: this.targets, own: false }];
-    const openFolder = (g: GroupDoc) => {
-      const top = stack[stack.length - 1];
-      if (plainFolder(g)) {
-        stack.push({ g, pair: top.pair, own: false });
-        return;
-      }
-      const depth = stack.filter((f) => f.own).length;
-      const pair = (this.folders[depth] ??= [
-        target(this.px.w, this.px.h),
-        target(this.px.w, this.px.h),
-      ]);
-      this.clipTo(view);
-      this.clear(pair[0]);
-      stack.push({ g, pair, own: true });
-    };
-    const closeFolder = () => {
-      const f = stack.pop()!;
-      if (!f.own || !f.g) return;
-      const g = f.g;
-      const into = stack[stack.length - 1].pair;
-      const gl = this.folderLayer(doc, g);
-      this.prepare(gl, into[0].texture);
-      this.runFilters(gl, f.pair, into[0].texture);
-      const gu = this.groupPass.uniforms;
-      const src = doc.layers.find((m) => m.id === g.mask?.source);
-      const mtex = src && matte.get(src.id);
-      gu.uMaskMode.value = mtex ? (g.mask?.mode === 'luma' ? 2 : 1) : 0;
-      gu.uMask.value = mtex ?? f.pair[0].texture;
-      gu.uMaskInvert.value = !!g.mask?.invert;
-      if (src) {
-        const whole = src.fills.some((x) => x.fillSpace === 'canvas');
-        gu.uMaskFrame.value.set(
-          whole ? 0 : src.frame.x,
-          whole ? 0 : src.frame.y,
-          whole ? this.size.w : src.frame.w,
-          whole ? this.size.h : src.frame.h,
-        );
-        gu.uMaskRot.value = whole ? 0 : (src.frame.rot * Math.PI) / 180;
-      }
-      gu.uOpacity.value = g.opacity ?? 1;
-      for (const sh of (g.shadows ?? []).filter((x) => x.visible)) {
-        gu.uMode.value = 1;
-        gu.uSrc.value = this.blur(f.pair[0].texture, sh.blur / 2, false);
-        gu.uOffset.value.set(sh.x, sh.y);
-        const c = rgb(sh.color);
-        gu.uColor.value.set(c.x, c.y, c.z, sh.opacity);
-        gu.uBase.value = into[0].texture;
-        gu.uBlend.value = 0;
-        this.draw(this.groupPass, into[1]);
-        into.reverse();
-      }
-      gu.uMode.value = 0;
-      gu.uSrc.value = f.pair[0].texture;
+  // A folder with effects, filtered, then laid with its drop shadows, mask,
+  // opacity and blend onto its parent.
+  private closeFolder(f: FrameCtx, stack: OpenFolder[]) {
+    const o = stack.pop()!;
+    if (!o.own || !o.g) return;
+    const g = o.g;
+    const into = stack[stack.length - 1].pair;
+    const gl = this.folderLayer(f.doc, g);
+    this.prepare(gl, into[0].texture);
+    this.runFilters(gl, o.pair, into[0].texture);
+    const gu = this.groupPass.uniforms;
+    this.maskInto(gu, f, g.mask, o.pair[0].texture);
+    gu.uOpacity.value = g.opacity ?? 1;
+    const lay = () => {
       gu.uBase.value = into[0].texture;
-      gu.uBlend.value = blendOf(g.blend ?? 'normal');
       this.draw(this.groupPass, into[1]);
       into.reverse();
     };
+    for (const sh of shadowsOf(g.effects, 'drop')) {
+      gu.uMode.value = 1;
+      gu.uSrc.value = this.blur(o.pair[0].texture, sh.blur / 2, false);
+      gu.uOffset.value.set(sh.x, sh.y);
+      const c = rgb(sh.color);
+      gu.uColor.value.set(c.x, c.y, c.z, sh.opacity);
+      gu.uBlend.value = 0;
+      lay();
+    }
+    gu.uMode.value = 0;
+    gu.uSrc.value = o.pair[0].texture;
+    gu.uBlend.value = blendOf(g.blend ?? 'normal');
+    lay();
+  }
 
-    // Mid-drag, start from the kept picture of everything under the first
-    // layer that changed, if those layers and the view are as they were.
-    // Folders with effects composite apart, so they always draw in full.
+  // Mid-drag, start from the kept picture of everything under the first
+  // layer that changed, if those layers and the view are as they were
+  // (`from`); otherwise note where to keep that picture this frame
+  // (`keepAt`). Folders with effects composite apart, so they always draw in
+  // full.
+  private dragStart({ doc, view }: FrameCtx) {
     let from = 0;
     let keepAt = -1;
     if (this.hold && !(doc.groups ?? []).some((g) => !plainFolder(g))) {
@@ -1062,32 +1231,12 @@ export class Compositor {
       }
     } else this.belowKey = null;
     this.lastLayers = doc.layers;
-    const keep = () => {
-      this.copyPass.uniforms.uSrc.value = this.targets[0].texture;
-      this.draw(this.copyPass, this.below);
-    };
+    return { from, keepAt };
+  }
 
-    for (const [index, l] of doc.layers.entries()) {
-      if (index === keepAt) keep();
-      if (index < from) continue;
-      const chain = chainOf(doc, l);
-      if (!l.visible || chain.some((g) => g.visible === false)) continue;
-      while (
-        stack.length > 1 &&
-        !chain.some((g) => g.id === stack[stack.length - 1].g?.id)
-      )
-        closeFolder();
-      for (const g of chain)
-        if (!stack.some((f) => f.g?.id === g.id)) openFolder(g);
-      drawLayer(l, stack[stack.length - 1].pair);
-    }
-    while (stack.length > 1) closeFolder();
-    if (keepAt === doc.layers.length) keep();
-
-    const p = this.post.uniforms;
-    p.uSrc.value = this.targets[0].texture;
-    p.uSurround.value = rgb(this.surround);
-    this.draw(this.post, null);
+  private keepBelow() {
+    this.copyPass.uniforms.uSrc.value = this.targets[0].texture;
+    this.draw(this.copyPass, this.below);
   }
 
   dispose() {

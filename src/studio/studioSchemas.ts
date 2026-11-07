@@ -104,22 +104,65 @@ export const strokeSchema = {
     { value: 'left', label: 'left' },
     { value: 'right', label: 'right' },
   ]),
+  // Absent on borders from before joins, which drew round.
+  join: select('Border', 'round', [
+    { value: 'miter', label: 'miter' },
+    { value: 'round', label: 'round' },
+    { value: 'bevel', label: 'bevel' },
+  ]),
+  miterAngle: when(
+    range('Border', 28.96, 1, 180, 0.01, 'miter angle'),
+    (v) => v.join === 'miter',
+  ),
 };
 
-// Border (stroke) types, by key, with the settings each adds to the common ones.
-export const STROKES: Record<string, { label: string; schema: Schema }> = {
-  line: { label: 'Line', schema: {} },
+// Effects by type, with the settings each has beyond its colour and opacity.
+const shadowGeo = (group: string, x: number, y: number, blur: number) => ({
+  x: range(group, x, -120, 120, 0.5, 'offset x'),
+  y: range(group, y, -120, 120, 0.5, 'offset y'),
+  blur: range(group, blur, 0, 160, 0.5),
+  spread: range(group, 0, -60, 60, 0.5),
+});
+export const EFFECTS: Record<
+  'drop' | 'inner' | 'fibres',
+  { label: string; main: string; schema: Schema }
+> = {
+  drop: {
+    label: 'Drop shadow',
+    main: 'blur',
+    schema: shadowGeo('Shadow', 6, 10, 14),
+  },
+  inner: {
+    label: 'Inner shadow',
+    main: 'blur',
+    schema: shadowGeo('Shadow', 2, 4, 8),
+  },
   fibres: {
     label: 'Paper fibres',
-    schema: { fibers: range('Border', 0.6, 0.01, 2, 0.01, 'fibres') },
+    main: 'width',
+    schema: {
+      width: range('Fibres', 12, 0.5, 80, 0.5),
+      fibers: range('Fibres', 0.6, 0.01, 2, 0.01, 'wobble'),
+      align: select(
+        'Fibres',
+        'inside',
+        [
+          { value: 'inside', label: 'inside' },
+          { value: 'center', label: 'centre' },
+          { value: 'outside', label: 'outside' },
+        ],
+        'position',
+      ),
+      offset: range('Fibres', 0, -80, 80, 0.5),
+      sides: select('Fibres', 'all', [
+        { value: 'all', label: 'all' },
+        { value: 'top', label: 'top' },
+        { value: 'bottom', label: 'bottom' },
+        { value: 'left', label: 'left' },
+        { value: 'right', label: 'right' },
+      ]),
+    },
   },
-};
-
-export const shadowSchema = {
-  x: range('Shadow', 6, -120, 120, 0.5, 'offset x'),
-  y: range('Shadow', 10, -120, 120, 0.5, 'offset y'),
-  blur: range('Shadow', 14, 0, 160, 0.5),
-  color: color('Shadow', '#1a1712', 'colour'),
 };
 
 const BOOLEAN_OPS = [

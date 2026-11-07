@@ -1,6 +1,6 @@
 import { ColorField } from './color';
 import { type Control, type Schema } from '@/lab/controls';
-import { sentence, words, rangeOf } from './shared';
+import { sentence, words, rangeOf, nudgeOf } from './shared';
 import { Section, NumberField, TextField, Labeled } from './basics';
 import { SelectField } from './menu';
 
@@ -28,6 +28,28 @@ export function Row({
             step={control.step}
             value={value as number}
             onChange={(e) => onChange(Number(e.target.value))}
+            onKeyDown={(e) => {
+              // Arrows move by a whole unit, like the number box beside it.
+              const d =
+                e.key === 'ArrowRight' || e.key === 'ArrowUp'
+                  ? 1
+                  : e.key === 'ArrowLeft' || e.key === 'ArrowDown'
+                    ? -1
+                    : 0;
+              if (!d) return;
+              e.preventDefault();
+              const n =
+                nudgeOf(control.min, control.max) * (e.shiftKey ? 10 : 1);
+              onChange(
+                Math.min(
+                  control.max,
+                  Math.max(
+                    control.min,
+                    +((value as number) + d * n).toFixed(4),
+                  ),
+                ),
+              );
+            }}
             className="studio-range"
           />
           <NumberField

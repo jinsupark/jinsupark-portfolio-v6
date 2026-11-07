@@ -71,7 +71,6 @@ export type FilterDoc = {
 // whose width wobbles by `fibers` like a torn sheet's paper core.
 export type StrokeDoc = {
   id: string;
-  type: string;
   visible: boolean;
   width: number;
   align: 'inside' | 'center' | 'outside';
@@ -80,7 +79,11 @@ export type StrokeDoc = {
   // Which part of the outline it runs along: all of it, or the side facing
   // one way (split corner to corner, like Figma's per-side strokes).
   sides?: 'all' | 'top' | 'bottom' | 'left' | 'right';
-  fibers: number;
+  // How the band turns a corner, as in Figma: sharp (until the corner is
+  // narrower than `miterAngle` degrees, then cut off), cut off, or rounded.
+  // Absent is round, which is how borders drew before joins existed.
+  join?: 'miter' | 'bevel' | 'round';
+  miterAngle?: number;
   opacity: number;
   blend: BlendMode;
   fills: FillDoc[];
@@ -96,16 +99,30 @@ export type OutlineDoc = {
   values: Record<string, unknown>;
 };
 
-// The shape, offset and softened, laid under the layer.
-export type ShadowDoc = {
+// An effect on the layer's shape, in one colour: a drop shadow (the shape,
+// offset and softened, under the layer), an inner shadow (the same, inside
+// the edge), or paper fibres (a torn sheet's paper core, a wobbling band just
+// inside the edge). `type` absent is a drop shadow.
+export type EffectDoc = {
   id: string;
+  type?: 'drop' | 'inner' | 'fibres';
   visible: boolean;
+  color: string;
+  opacity: number;
+  // Shadows.
   x: number;
   y: number;
   blur: number;
-  color: string;
-  opacity: number;
+  spread?: number;
+  // Fibres: the band's width, how much it wobbles, and where it sits on the
+  // edge (inside by default).
+  width?: number;
+  fibers?: number;
+  align?: 'inside' | 'center' | 'outside';
+  offset?: number;
+  sides?: StrokeDoc['sides'];
 };
+export const effectType = (e: EffectDoc) => e.type ?? 'drop';
 
 export type LayerDoc = {
   id: string;
@@ -122,7 +139,7 @@ export type LayerDoc = {
   fills: FillDoc[];
   filters: FilterDoc[];
   strokes: StrokeDoc[];
-  shadows: ShadowDoc[];
+  effects: EffectDoc[];
   outline: OutlineDoc[];
   // The outline the fills are cut to. Absent is the whole frame.
   shape?: ShapeDoc;
@@ -147,7 +164,7 @@ export type GroupDoc = {
   opacity?: number;
   blend?: BlendMode;
   filters?: FilterDoc[];
-  shadows?: ShadowDoc[];
+  effects?: EffectDoc[];
   mask?: Mask;
 };
 
@@ -186,7 +203,7 @@ export const plainFolder = (g: GroupDoc) =>
   (g.opacity ?? 1) === 1 &&
   (g.blend ?? 'normal') === 'normal' &&
   !g.filters?.some((f) => f.visible) &&
-  !g.shadows?.some((s) => s.visible) &&
+  !g.effects?.some((s) => s.visible) &&
   !g.mask?.source;
 
 export type Artwork = {
@@ -426,7 +443,7 @@ export const newLayer = (
   fills,
   filters: [],
   strokes: [],
-  shadows: [],
+  effects: [],
   outline: [],
 });
 
@@ -444,7 +461,7 @@ export const newFill = (
   blend: 'normal',
 });
 
-const solidFill = (color: string, id = layerId()): FillDoc => ({
+export const solidFill = (color: string, id = layerId()): FillDoc => ({
   id,
   type: 'solid',
   version: 2,
@@ -454,17 +471,18 @@ const solidFill = (color: string, id = layerId()): FillDoc => ({
   blend: 'normal',
 });
 
-export const newStroke = (type = 'line', id = layerId()): StrokeDoc => ({
+export const newStroke = (id = layerId()): StrokeDoc => ({
   id,
-  type,
   visible: true,
-  width: type === 'fibres' ? 12 : 2,
-  align: type === 'fibres' ? 'inside' : 'center',
+  width: 2,
+  align: 'center',
   offset: 0,
-  fibers: type === 'fibres' ? 0.6 : 0,
+  sides: 'all',
+  join: 'miter',
+  miterAngle: 28.96,
   opacity: 1,
   blend: 'normal',
-  fills: [solidFill(type === 'fibres' ? '#f8f5ee' : '#111111', `${id}-fill`)],
+  fills: [solidFill('#111111', `${id}-fill`)],
 });
 
 export const newOutline = (
@@ -472,14 +490,17 @@ export const newOutline = (
   values: Record<string, unknown>,
 ): OutlineDoc => ({ id: layerId(), type, visible: true, values });
 
-export const newShadow = (): ShadowDoc => ({
+export const newEffect = (type: EffectDoc['type'] = 'drop'): EffectDoc => ({
   id: layerId(),
+  type,
   visible: true,
-  x: 6,
-  y: 10,
-  blur: 14,
-  color: '#1a1712',
-  opacity: 0.5,
+  color: type === 'fibres' ? '#f8f5ee' : '#1a1712',
+  opacity: type === 'fibres' ? 1 : type === 'inner' ? 0.35 : 0.5,
+  x: type === 'inner' ? 2 : 6,
+  y: type === 'inner' ? 4 : 10,
+  blur: type === 'inner' ? 8 : 14,
+  spread: 0,
+  ...(type === 'fibres' && { width: 12, fibers: 0.6 }),
 });
 
 export const newFilter = (
@@ -495,16 +516,53 @@ export const newFilter = (
 
 // An opened artwork with every layer's lists present (empty where a draft or
 // file left one out), so nothing downstream has to guard for them.
+// Drafts and files from before Effects: `shadows` become drop shadows, and
+// paper-fibre borders (always inside, one colour) become fibres effects.
+type Before = {
+  shadows?: EffectDoc[];
+  strokes?: (StrokeDoc & { type?: string; fibers?: number })[];
+};
 export const withLists = (d: Artwork): Artwork => ({
   ...d,
-  layers: d.layers.map((l) => ({
-    ...l,
-    fills: l.fills ?? [],
-    filters: l.filters ?? [],
-    strokes: l.strokes ?? [],
-    shadows: l.shadows ?? [],
-    outline: l.outline ?? [],
+  groups: d.groups?.map(({ shadows, ...g }: GroupDoc & Before) => ({
+    ...g,
+    effects: g.effects ?? shadows,
   })),
+  layers: d.layers.map((layer) => {
+    const {
+      shadows,
+      strokes = [],
+      ...l
+    } = layer as Omit<LayerDoc, 'strokes'> & Before;
+    const fibres = strokes.filter((s) => s.type === 'fibres');
+    return {
+      ...l,
+      fills: l.fills ?? [],
+      filters: l.filters ?? [],
+      strokes: strokes
+        .filter((s) => s.type !== 'fibres')
+        .map(({ type: _t, fibers: _f, ...s }) => s),
+      effects: l.effects ?? [
+        ...fibres.map((s): EffectDoc => ({
+          id: s.id,
+          type: 'fibres',
+          visible: s.visible,
+          color: String(s.fills?.[0]?.values?.color ?? '#f8f5ee'),
+          opacity: s.opacity,
+          x: 0,
+          y: 0,
+          blur: 0,
+          width: s.width,
+          fibers: s.fibers ?? 0.6,
+          align: s.align,
+          offset: s.offset,
+          sides: s.sides,
+        })),
+        ...(shadows ?? []),
+      ],
+      outline: l.outline ?? [],
+    };
+  }),
 });
 
 // The fill a layer is named and listed by: its topmost one.

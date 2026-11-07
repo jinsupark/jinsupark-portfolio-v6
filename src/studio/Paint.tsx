@@ -36,7 +36,7 @@ import {
   SelectField,
 } from './ui';
 
-type Tab = 'solid' | 'gradient' | 'image' | 'video' | 'shader';
+export type Tab = 'solid' | 'gradient' | 'image' | 'video' | 'shader';
 const TABS: { id: Tab; label: string; Icon: typeof Square }[] = [
   { id: 'solid', label: 'Solid', Icon: Square },
   { id: 'gradient', label: 'Gradient', Icon: Blend },
@@ -67,6 +67,7 @@ export default function PaintPopover({
   onRetype,
   onClose,
   extra,
+  kinds,
 }: {
   fill: FillDoc;
   types: Record<string, LayerType>;
@@ -81,6 +82,9 @@ export default function PaintPopover({
   onClose: () => void;
   // More settings under the paint's (a border's width, position…).
   extra?: React.ReactNode;
+  // The tabs offered; all of them unless given (a border has no image or
+  // video).
+  kinds?: Tab[];
 }) {
   const t = types[fill.type];
   const tab: Tab = t?.paint ?? 'shader';
@@ -135,17 +139,19 @@ export default function PaintPopover({
       }
     >
       <div className="flex items-center gap-0.5 border-b border-black/6 px-2 py-1.5">
-        {TABS.map(({ id, label, Icon }) => (
-          <IconButton
-            key={id}
-            title={label}
-            active={tab === id}
-            onClick={() => pickTab(id)}
-            className="size-7!"
-          >
-            <Icon size={14} strokeWidth={1.75} />
-          </IconButton>
-        ))}
+        {TABS.filter((x) => !kinds || kinds.includes(x.id)).map(
+          ({ id, label, Icon }) => (
+            <IconButton
+              key={id}
+              title={label}
+              active={tab === id}
+              onClick={() => pickTab(id)}
+              className="size-7!"
+            >
+              <Icon size={14} strokeWidth={1.75} />
+            </IconButton>
+          ),
+        )}
       </div>
 
       {tab === 'solid' && (

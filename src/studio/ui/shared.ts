@@ -16,3 +16,13 @@ export const rangeOf = (c: RangeControl) => ({
   max: c.max,
   step: c.step,
 });
+
+// How far an arrow key moves a value, in its own units: one shown unit (a
+// whole number, a whole percent), or a tenth or hundredth of one when the
+// whole range is smaller than that would allow.
+export function nudgeOf(min: number, max: number, factor = 1) {
+  const span = (max - min) * factor;
+  const shown =
+    !Number.isFinite(span) || span >= 10 ? 1 : span >= 1 ? 0.1 : 0.01;
+  return shown / factor;
+}

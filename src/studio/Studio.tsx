@@ -20,6 +20,8 @@ import {
   groupLayers,
   layerId,
   newLayer,
+  newStroke,
+  effectType,
   withLists,
   newArtwork,
   newFill,
@@ -49,12 +51,13 @@ import {
   combineSchema,
   OUTLINES,
   FILTERS,
-  shadowSchema,
+  EFFECTS,
   strokeSchema,
 } from './studioSchemas';
 import { isMediaFile, isVideoFile, mediaSize, uploadAsset } from './paints';
 import Toolbar from './Toolbar';
 import { useHistory } from './useHistory';
+import type { Guide } from './snapping';
 import { hitLayer, TOOLS, typing, type Brush, type Tool } from './tools';
 import {
   ControlGroups,
@@ -227,6 +230,8 @@ export default function Studio({ work }: { work?: string }) {
     return () => clearTimeout(t);
   }, [doc, work]);
 
+  // Red alignment guides while something is dragged.
+  const [guides, setGuides] = useState<Guide[]>([]);
   const history = useHistory(doc, setDoc);
   const step = (back: boolean) => {
     const next = history(back);
@@ -282,9 +287,17 @@ export default function Studio({ work }: { work?: string }) {
     }));
   // The selection's box. Setting it carries every selected frame along.
   const box = boundsOf(picked.filter((l) => !l.locked).map((l) => l.frame));
+  // A selection's box resized: every layer is placed from where it was when
+  // the drag started, not from the last move, so rounding never builds up.
+  const boxStart = useRef<{ box: Frame; frames: Map<string, Frame> } | null>(
+    null,
+  );
   const setBox = (to: Frame) => {
-    if (!box) return;
-    patchMany(ids, (l) => ({ frame: remap(l.frame, box, to) }));
+    const from = boxStart.current;
+    if (!box || !from) return;
+    patchMany(ids, (l) => ({
+      frame: remap(from.frames.get(l.id) ?? l.frame, from.box, to),
+    }));
   };
 
   // An image or video file as a new layer on top, at its own proportions (no
@@ -315,6 +328,7 @@ export default function Studio({ work }: { work?: string }) {
   const addLayer = (
     type: string,
     shape?: { frame: LayerDoc['frame']; shape: ShapeDoc; name: string },
+    over?: Partial<LayerDoc>,
   ) => {
     const t = types[type];
     if (!t) return;
@@ -323,6 +337,7 @@ export default function Studio({ work }: { work?: string }) {
         newFill(type, { ...t.initial() }, t.version),
       ]),
       ...(shape && { shape: shape.shape }),
+      ...over,
     };
     setDoc((d) => {
       const at = d.layers.findIndex((x) => x.id === selected);
@@ -588,11 +603,10 @@ export default function Studio({ work }: { work?: string }) {
                       }
                     : o;
                 }),
-                shadows: l.shadows.map((sh) => ({
-                  ...sh,
-                  ...defaultsOf(shadowSchema),
-                  ...fit(sh, shadowSchema),
-                })),
+                effects: l.effects.map((e) => {
+                  const schema = EFFECTS[effectType(e)].schema;
+                  return { ...e, ...defaultsOf(schema), ...fit(e, schema) };
+                }),
               };
               if (l.combine) {
                 const s = combineSchema(l, doc.layers);
@@ -835,6 +849,8 @@ export default function Studio({ work }: { work?: string }) {
           onBackdrop={() => setSelected(null)}
         >
           <ShapeOverlay
+            guides={guides}
+            onGuides={setGuides}
             tool={tool}
             layers={doc.layers}
             layer={layer}
@@ -855,12 +871,20 @@ export default function Studio({ work }: { work?: string }) {
             onDone={() => setTool('select')}
             size={size}
             onCreate={(t, frame, shape) => {
-              addLayer('solid', {
-                frame,
-                shape,
-                name: SHAPE_NAMES[t] ?? 'Shape',
-              });
-              setTool('select');
+              // An open pen line has no inside: a border, no fill.
+              addLayer(
+                'solid',
+                {
+                  frame,
+                  shape,
+                  name: shape.open
+                    ? 'Line'
+                    : (SHAPE_NAMES[t as Tool] ?? 'Shape'),
+                },
+                shape.open ? { fills: [], strokes: [newStroke()] } : undefined,
+              );
+              // Finishing with the pen goes on to its points, as in Figma.
+              setTool(t === 'bezier' ? 'edit' : 'select');
             }}
           />
           {box && tool === 'select' && (
@@ -872,6 +896,20 @@ export default function Studio({ work }: { work?: string }) {
               size={size}
               rotatable={!!layer && !layer.locked}
               onDuplicate={() => paste(picked)}
+              targets={doc.layers
+                .filter((l) => l.visible && !layersOf(doc, sel).includes(l.id))
+                .map((l) => boundsOf([l.frame])!)}
+              onGuides={setGuides}
+              onStart={() => {
+                boxStart.current = box && {
+                  box,
+                  frames: new Map(
+                    doc.layers
+                      .filter((l) => ids.includes(l.id))
+                      .map((l) => [l.id, l.frame]),
+                  ),
+                };
+              }}
               onShiftClick={(p) => {
                 const hit = hitLayer(doc.layers, p);
                 if (hit) pick([hit.id], true);

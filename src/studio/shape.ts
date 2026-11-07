@@ -28,6 +28,10 @@ export type ShapeDoc = {
   points: number; // star
   inner: number; // star inner radius, as a share of the outer
   path: Vertex[];
+  // An open path (a line drawn with the pen and finished with Enter): no
+  // segment back from the last vertex to the first, no inside, so it shows
+  // only through its borders.
+  open?: boolean;
 };
 
 export const newShape = (kind: ShapeKind, sides = 6): ShapeDoc => ({
@@ -150,12 +154,19 @@ function bez(a: number, b: number, c: number, d: number, t: number) {
   return m * m * m * a + 3 * m * m * t * b + 3 * m * t * t * c + t * t * t * d;
 }
 
-// The closed outline as a polygon in frame-local design units.
-export function flatten(verts: Vertex[], w: number, h: number, maxPts = 1200) {
+// The outline as points in frame-local design units: a closed polygon, or for
+// an open path a polyline ending on its last vertex.
+export function flatten(
+  verts: Vertex[],
+  w: number,
+  h: number,
+  maxPts = 1200,
+  open = false,
+) {
   const n = verts.length;
   const segs: { a: Vertex; b: Vertex; len: number }[] = [];
   let total = 0;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < (open ? n - 1 : n); i++) {
     const a = verts[i];
     const b = verts[(i + 1) % n];
     const len =
@@ -182,7 +193,27 @@ export function flatten(verts: Vertex[], w: number, h: number, maxPts = 1200) {
       });
     }
   }
+  if (open && n) out.push({ x: verts[n - 1].x * w, y: verts[n - 1].y * h });
   return out;
+}
+
+// Whether `q` is within `r` of the polyline `poly` (open: no closing segment).
+export function nearLine(poly: P[], q: P, r: number) {
+  for (let i = 0; i + 1 < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[i + 1];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const t = Math.max(
+      0,
+      Math.min(
+        1,
+        ((q.x - a.x) * ex + (q.y - a.y) * ey) / (ex * ex + ey * ey || 1),
+      ),
+    );
+    if (Math.hypot(q.x - a.x - ex * t, q.y - a.y - ey * t) <= r) return true;
+  }
+  return false;
 }
 
 export function contains(poly: P[], q: P) {
@@ -448,4 +479,36 @@ export function smoothPath(f: Frame, pts: P[]) {
       o: t,
     })),
   );
+}
+
+// The corners of a sharp-cornered convex outline, in artwork units, for
+// mitred and bevelled borders; null for anything curved or concave, whose
+// borders stay round (as the distance field draws them).
+export function cornersOf(s: ShapeDoc | undefined, f: Frame): P[] | null {
+  if (s?.open) return null;
+  const local: P[] = s
+    ? (() => {
+        const v = verticesOf(s, f.w, f.h);
+        if (v.length > 32 || v.some((x) => x.ix || x.iy || x.ox || x.oy))
+          return [];
+        return v.map((x) => ({ x: x.x * f.w, y: x.y * f.h }));
+      })()
+    : [
+        { x: 0, y: 0 },
+        { x: f.w, y: 0 },
+        { x: f.w, y: f.h },
+        { x: 0, y: f.h },
+      ];
+  if (local.length < 3) return null;
+  let sign = 0;
+  for (let i = 0; i < local.length; i++) {
+    const a = local[i];
+    const b = local[(i + 1) % local.length];
+    const c = local[(i + 2) % local.length];
+    const z = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (Math.abs(z) < 1e-9) continue;
+    if (sign && Math.sign(z) !== sign) return null;
+    sign = Math.sign(z);
+  }
+  return local.map((q) => toArtwork(f, q));
 }
