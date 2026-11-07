@@ -1,12 +1,16 @@
 @font-face {
-  font-family: 'Studio Inter';
-  src: url('./fonts/inter-variable.woff2') format('woff2');
+  font-family: 'Studio Geist';
+  src: url('./fonts/geist-variable.woff2') format('woff2');
   font-weight: 100 900;
   font-display: swap;
 }
 
 .studio {
-  font-family: 'Studio Inter', system-ui, sans-serif;
+  font-family: 'Studio Geist', system-ui, sans-serif;
+  /* Geist's straight l (ss03) and straight-legged R (ss04). */
+  font-feature-settings:
+    'ss03' 1,
+    'ss04' 1;
   color-scheme: light;
   -webkit-font-smoothing: antialiased;
 }
@@ -71,4 +75,59 @@
 .studio-swatch::-moz-color-swatch {
   border: 0.5px solid rgb(0 0 0 / 0.15);
   border-radius: 3px;
+}
+
+/* Dark mode (⇧⌘D): the studio's colours are Tailwind's neutral, white and
+   black, read from variables, so redefining them here flips every panel,
+   field, menu and hairline. White is the raised surface (fields, menus,
+   popovers); black is the ink, so `black/8` hairlines become light ones. */
+.studio[data-theme='dark'] {
+  color-scheme: dark;
+  --color-white: #2b2b2b;
+  --color-black: #ffffff;
+  --color-neutral-50: #1e1e1e;
+  --color-neutral-100: #252525;
+  --color-neutral-200: #333333;
+  --color-neutral-300: #454545;
+  --color-neutral-400: #7a7a7a;
+  --color-neutral-500: #a3a3a3;
+  --color-neutral-600: #c2c2c2;
+  --color-neutral-700: #d4d4d4;
+  --color-neutral-800: #e6e6e6;
+  --color-neutral-900: #f5f5f5;
+  --color-neutral-950: #fafafa;
+}
+.studio[data-theme='dark'] input[type='range']::-webkit-slider-runnable-track {
+  background: rgb(255 255 255 / 0.14);
+}
+.studio[data-theme='dark'] input[type='range']::-moz-range-track {
+  background: rgb(255 255 255 / 0.14);
+}
+.studio[data-theme='dark'] input[type='range']::-webkit-slider-thumb {
+  background: #d4d4d4;
+}
+.studio[data-theme='dark'] input[type='range']::-moz-range-thumb {
+  background: #d4d4d4;
+}
+/* Text on the blue highlight stays white in both themes. */
+.studio [role='option'].bg-sky-500 {
+  color: #fff;
+}
+
+/* Holding space shows the hand over everything on the canvas, closed while
+   the view is being dragged. */
+[data-hand='grab'],
+[data-hand='grab'] * {
+  cursor: grab !important;
+}
+[data-hand='grabbing'],
+[data-hand='grabbing'] * {
+  cursor: grabbing !important;
+}
+
+/* Raised buttons (white, hovering to neutral-50 in light) lift on hover in
+   dark too, rather than sinking into the panel colour. */
+.studio[data-theme='dark'] .hover\:bg-neutral-50:hover,
+.studio[data-theme='dark'] .hover\:bg-white:hover {
+  background-color: #363636;
 }

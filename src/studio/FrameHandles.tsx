@@ -154,7 +154,7 @@ export default function FrameHandles({
       }}
     >
       {sizing && (
-        <span className="pointer-events-none absolute top-full left-1/2 mt-2 -translate-x-1/2 rounded-md bg-sky-500 px-1.5 py-0.5 text-[11px] whitespace-nowrap text-white tabular-nums">
+        <span className="pointer-events-none absolute top-full left-1/2 mt-2 -translate-x-1/2 rounded-md bg-sky-500 px-1.5 py-0.5 text-[11px] whitespace-nowrap text-[#fff] tabular-nums">
           {sizing === 'rot'
             ? `${Math.round(frame.rot)}°`
             : `${Math.round(frame.w)} × ${Math.round(frame.h)}`}
@@ -178,7 +178,7 @@ export default function FrameHandles({
         <span
           key={g}
           onPointerDown={(e) => down(e, g)}
-          className="pointer-events-auto absolute size-2.5 -translate-1/2 rounded-[2px] border border-sky-500 bg-white"
+          className="pointer-events-auto absolute size-2.5 -translate-1/2 rounded-[2px] border border-sky-500 bg-[#fff]"
           style={{
             left: g.includes('w') ? 0 : '100%',
             top: g.includes('n') ? 0 : '100%',

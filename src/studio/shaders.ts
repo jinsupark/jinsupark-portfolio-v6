@@ -22,7 +22,6 @@ export function shaderArtwork(
     slug: `shader-${t.type}`,
     title: t.label,
     about: '',
-    featured: false,
     background: '#e3e1dc',
     size,
     post: { grain: 0, grainSize: 1, vignette: 0 },

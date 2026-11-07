@@ -2,7 +2,7 @@ import { Check, ChevronDown, RotateCcw, X } from 'lucide-react';
 import { Children, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Control, RangeControl, Schema } from '@/lab/controls';
-import { popoverAt } from './tools';
+import { announcePopover, popoverAt, useOnOtherPopover } from './tools';
 
 // The studio's own controls, in a light, compact macOS style. They mirror the
 // lab's ControlRows API so a schema renders the same way, but the studio owns
@@ -52,6 +52,12 @@ export function Section({
   );
 }
 
+// Tooltips warm up, as in macOS and Figma: the first waits a moment, but
+// while one is showing (or just was) the next shows at once.
+let tipsShowing = 0;
+let tipLastHidden = 0;
+const WARM_MS = 500;
+
 // A hover label like Paper's: the name, and its shortcut in grey, shown after
 // a moment beside the element. "Undo (⌘Z)" splits into the two.
 export function Tip({
@@ -69,20 +75,34 @@ export function Tip({
   const [name, keys] = m ? [m[1], m[2]] : [label, ''];
   const show = (el: HTMLElement) => {
     clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      const r = el.getBoundingClientRect();
-      setAt(
-        side === 'right'
-          ? { x: r.right + 8, y: r.top + r.height / 2 }
-          : { x: r.left + r.width / 2, y: r.bottom + 6 },
-      );
-    }, 450);
+    const warm = tipsShowing > 0 || performance.now() - tipLastHidden < WARM_MS;
+    timer.current = window.setTimeout(
+      () => {
+        const r = el.getBoundingClientRect();
+        setAt(
+          side === 'right'
+            ? { x: r.right + 8, y: r.top + r.height / 2 }
+            : { x: r.left + r.width / 2, y: r.bottom + 6 },
+        );
+      },
+      warm ? 0 : 450,
+    );
   };
   const hide = () => {
     clearTimeout(timer.current);
     setAt(null);
   };
   useEffect(() => () => clearTimeout(timer.current), []);
+  // Count this one while it's up, and note when it went, for the warm-up.
+  const shown = at !== null;
+  useEffect(() => {
+    if (!shown) return;
+    tipsShowing++;
+    return () => {
+      tipsShowing--;
+      tipLastHidden = performance.now();
+    };
+  }, [shown]);
   return (
     <span
       className="contents"
@@ -126,7 +146,7 @@ export function IconButton({
       <button
         aria-label={title}
         onClick={onClick}
-        className={`grid size-6 shrink-0 place-items-center rounded-md ${active ? 'bg-black/8 text-neutral-900' : 'text-neutral-500 hover:bg-black/5 hover:text-neutral-900'} ${className}`}
+        className={`grid size-6 shrink-0 place-items-center rounded-md outline-none ${active ? 'bg-sky-500 text-[#fff]' : 'text-neutral-500 hover:bg-black/5 hover:text-neutral-900'} ${className}`}
       >
         {children}
       </button>
@@ -911,6 +931,8 @@ export function ColorField({
 }) {
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
+  const [me] = useState(() => ({}));
+  useOnOtherPopover(me, () => setAt(null));
   const commit = () => {
     const h = (draft ?? '').replace(/[^0-9a-f]/gi, '');
     if (h.length === 3 || h.length === 6)
@@ -925,7 +947,11 @@ export function ColorField({
         <button
           data-popover-anchor
           aria-label="Pick a colour"
-          onClick={(e) => setAt(at ? null : popoverAt(e.currentTarget, 280))}
+          onClick={(e) => {
+            if (at) return setAt(null);
+            if (!e.currentTarget.closest('[data-popover]')) announcePopover(me);
+            setAt(popoverAt(e.currentTarget, 280));
+          }}
           className="size-3.5 shrink-0 rounded-[3px] border border-black/15"
           style={{ background: value }}
         />

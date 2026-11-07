@@ -1,38 +1,46 @@
-import { Check, ChevronDown, FilePlus, RotateCcw, Save } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  FilePlus,
+  Moon,
+  RotateCcw,
+  Save,
+  Sun,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { TextField } from './ui';
 
 // The artwork's name at the top of the sidebar, like Paper's and Figma's:
 // double-click to rename it; click for its menu — open another work, start a
-// new one, its slug, and whether Home features it.
+// new one, its slug.
 export default function ArtworkTitle({
   title,
   slug,
-  featured,
   current,
   works,
   onRename,
   onSlug,
-  onFeatured,
   onOpen,
   onNew,
   onSave,
   onRevert,
+  dark,
+  onToggleDark,
 }: {
   title: string;
   slug: string;
-  featured: boolean;
   // The open work's slug, or empty for an unsaved draft.
   current: string;
   works: { slug: string; title: string }[];
   onRename: (title: string) => void;
   onSlug: (slug: string) => void;
-  onFeatured: (featured: boolean) => void;
   onOpen: (slug: string) => void;
   onNew: () => void;
   onSave: () => void;
   // Only for a saved work: drop the unsaved edits.
   onRevert?: () => void;
+  dark: boolean;
+  onToggleDark: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -102,15 +110,6 @@ export default function ArtworkTitle({
               <span className="text-neutral-500">Slug</span>
               <TextField value={slug} onChange={onSlug} />
             </label>
-            <label className="flex items-center justify-between">
-              <span className="text-neutral-500">Featured on Home</span>
-              <input
-                type="checkbox"
-                checked={featured}
-                onChange={(e) => onFeatured(e.target.checked)}
-                className="accent-neutral-800"
-              />
-            </label>
           </div>
           <ul className="max-h-64 overflow-y-auto py-1">
             {[{ slug: '', title: 'Unsaved draft' }, ...works].map((w) => (
@@ -144,6 +143,23 @@ export default function ArtworkTitle({
               <Save size={12} className="text-neutral-500" />
               <span className="flex-1">Save</span>
               <span className="text-neutral-400">⌘S</span>
+            </button>
+            <button
+              onClick={() => {
+                setMenu(false);
+                onToggleDark();
+              }}
+              className="flex h-7 w-full items-center gap-2 px-2.5 text-left hover:bg-black/4"
+            >
+              {dark ? (
+                <Sun size={12} className="text-neutral-500" />
+              ) : (
+                <Moon size={12} className="text-neutral-500" />
+              )}
+              <span className="flex-1">
+                {dark ? 'Light mode' : 'Dark mode'}
+              </span>
+              <span className="text-neutral-400">⇧⌘D</span>
             </button>
             {onRevert && (
               <button

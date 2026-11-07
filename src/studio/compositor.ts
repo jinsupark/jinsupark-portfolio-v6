@@ -148,6 +148,13 @@ const pass = (frag: string, uniforms: Record<string, THREE.IUniform>) =>
     depthWrite: false,
   });
 
+const COPY_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D uSrc;
+in vec2 vUv;
+out vec4 outColor;
+void main() { outColor = texture(uSrc, vUv); }`;
+
 const target = (w = 1, h = 1, half = false) =>
   new THREE.WebGLRenderTarget(w, h, {
     depthBuffer: false,
@@ -304,6 +311,12 @@ export class Compositor {
   // A folder that's blended, filtered, masked or shadowed composites its
   // layers here first, one pair per level of nesting.
   private folders: Pair[] = [];
+  // Mid-drag, the artwork under the first layer that changed, drawn once and
+  // reused while those layers stay the same (keyed by them and the view).
+  private below = target();
+  private belowKey: unknown[] | null = null;
+  private lastLayers: LayerDoc[] = [];
+  private copyPass = pass(COPY_FRAG, { uSrc: { value: null } });
 
   private sdfs = new Map<string, Sdf>();
   // Bound to the field samplers a plain-rectangle layer never reads.
@@ -345,6 +358,9 @@ export class Compositor {
   // Whether something changed since the last frame, for a player that only
   // renders on change while its animation is paused.
   dirty = true;
+  // While something is dragged: animation stops and unchanged layers keep
+  // their last drawing, so each frame is only the compositing passes.
+  hold = false;
 
   setSize(width: number, height: number, dpr: number) {
     this.dirty = true;
@@ -366,6 +382,7 @@ export class Compositor {
         (v.x !== view.x || v.y !== view.y || v.w !== view.w || v.h !== view.h))
     )
       this.dirty = true;
+    if (surround !== this.surround) this.dirty = true;
     this.view = view;
     this.surround = surround;
   }
@@ -383,6 +400,7 @@ export class Compositor {
       this.dist,
       ...[...this.mattes.values()].flat(),
       ...this.folders.flat(),
+      this.below,
     ];
   }
 
@@ -624,9 +642,10 @@ export class Compositor {
         w: canvas ? this.size.w : t.shapeStyle ? fr.w + 2 * pad : fr.w,
         h: canvas ? this.size.h : t.shapeStyle ? fr.h + 2 * pad : fr.h,
         scale,
-        dt,
+        dt: this.hold ? 0 : dt,
         values: this.valuesOf(f, t.schema),
         renderer: this.renderer,
+        hold: this.hold,
         outline: t.shapeStyle ? this.styleOutline(l, pad) : undefined,
       });
       this.step(pair, (u) => {
@@ -1022,7 +1041,44 @@ export class Compositor {
       into.reverse();
     };
 
-    for (const l of doc.layers) {
+    // Mid-drag, start from the kept picture of everything under the first
+    // layer that changed, if those layers and the view are as they were.
+    // Folders with effects composite apart, so they always draw in full.
+    let from = 0;
+    let keepAt = -1;
+    if (this.hold && !(doc.groups ?? []).some((g) => !plainFolder(g))) {
+      const prev = this.lastLayers;
+      const changed = doc.layers.findIndex((l, i) => prev[i] !== l);
+      const first = changed < 0 ? doc.layers.length : changed;
+      const key = [
+        doc.background,
+        view.x,
+        view.y,
+        view.w,
+        view.h,
+        this.px.w,
+        this.px.h,
+        ...doc.layers.slice(0, first),
+      ];
+      const k = this.belowKey;
+      if (k && k.length === key.length && key.every((x, i) => x === k[i])) {
+        from = first;
+        this.copyPass.uniforms.uSrc.value = this.below.texture;
+        this.draw(this.copyPass, this.targets[0]);
+      } else {
+        keepAt = first;
+        this.belowKey = key;
+      }
+    } else this.belowKey = null;
+    this.lastLayers = doc.layers;
+    const keep = () => {
+      this.copyPass.uniforms.uSrc.value = this.targets[0].texture;
+      this.draw(this.copyPass, this.below);
+    };
+
+    for (const [index, l] of doc.layers.entries()) {
+      if (index === keepAt) keep();
+      if (index < from) continue;
       const chain = chainOf(doc, l);
       if (!l.visible || chain.some((g) => g.visible === false)) continue;
       while (
@@ -1035,14 +1091,16 @@ export class Compositor {
       drawLayer(l, stack[stack.length - 1].pair);
     }
     while (stack.length > 1) closeFolder();
+    if (keepAt === doc.layers.length) keep();
 
     const p = this.post.uniforms;
     p.uSrc.value = this.targets[0].texture;
     p.uRes.value.set(this.px.w, this.px.h);
     p.uTime.value = this.time;
-    p.uGrain.value = doc.post.grain;
-    p.uGrainSize.value = Math.max(1, doc.post.grainSize * scale);
-    p.uVignette.value = doc.post.vignette;
+    // Grain and vignette are filters now; the old post settings are ignored.
+    p.uGrain.value = 0;
+    p.uGrainSize.value = 1;
+    p.uVignette.value = 0;
     p.uSurround.value = rgb(this.surround);
     this.draw(this.post, null);
   }
@@ -1073,6 +1131,7 @@ export class Compositor {
       this.blurPass,
       this.layerPass,
       this.groupPass,
+      this.copyPass,
       this.post,
       this.sdfPass,
     ])

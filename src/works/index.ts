@@ -22,6 +22,3 @@ export const WORKS: Work[] = Object.entries(DOCS)
   .sort((a, b) => a.doc.title.localeCompare(b.doc.title));
 
 export const workOf = (slug: string) => WORKS.find((w) => w.slug === slug);
-
-// What Home shows: the first featured work, else any.
-export const featuredWork = () => WORKS.find((w) => w.doc.featured) ?? WORKS[0];

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Brush as BrushIcon,
   Circle,
@@ -109,6 +109,9 @@ export function hitLayer(layers: LayerDoc[], p: P) {
 // opened from, a few pixels off, level with `el` where the screen allows.
 export const POPOVER_W = 264;
 export function popoverAt(el: Element, width = POPOVER_W) {
+  // Only a popover opened from inside another sits beside it; one opened
+  // from the panel replaces whatever was open, so it takes the usual place.
+  const nested = !!el.closest('[data-popover]');
   const r = el.getBoundingClientRect();
   const from = (
     el.closest('[data-popover]') ?? el.closest('aside')
@@ -116,9 +119,11 @@ export function popoverAt(el: Element, width = POPOVER_W) {
   const top = Math.max(8, Math.min(r.top - 8, innerHeight - 360));
   let left = (from?.left ?? r.left) - width - 4;
   // Beside any popover already open there, rather than on top of it.
-  const open = [...document.querySelectorAll('[data-popover]')].map((p) =>
-    p.getBoundingClientRect(),
-  );
+  const open = nested
+    ? [...document.querySelectorAll('[data-popover]')].map((p) =>
+        p.getBoundingClientRect(),
+      )
+    : [];
   for (let moved = true; moved;) {
     moved = false;
     for (const o of open)
@@ -130,15 +135,44 @@ export function popoverAt(el: Element, width = POPOVER_W) {
   return { top, left: Math.max(8, left) };
 }
 
-// Which items of a list have their popover open; several can be at once.
+// One popover at a time, as in Figma: opening one from the panel closes any
+// other, in any list. One opened from inside a popover (a border's paint)
+// sits beside it instead, and goes when its parent does.
+const POPOVER_OPENED = 'studio:popover-opened';
+export function announcePopover(owner: unknown) {
+  dispatchEvent(new CustomEvent(POPOVER_OPENED, { detail: owner }));
+}
+export function useOnOtherPopover(owner: unknown, close: () => void) {
+  const latest = useRef(close);
+  useEffect(() => {
+    latest.current = close;
+  });
+  useEffect(() => {
+    const on = (e: Event) => {
+      if ((e as CustomEvent).detail !== owner) latest.current();
+    };
+    addEventListener(POPOVER_OPENED, on);
+    return () => removeEventListener(POPOVER_OPENED, on);
+  }, [owner]);
+}
+
+// Which item of a list has its popover open (several only when they were
+// opened from inside a popover).
 export type At = { id: string; top: number; left: number };
 export function usePopovers() {
   const [opens, setOpens] = useState<At[]>([]);
+  const [me] = useState(() => ({}));
+  useOnOtherPopover(me, () => setOpens([]));
   const isOpen = (id: string) => opens.some((o) => o.id === id);
-  const openAt = (id: string, el: Element) =>
+  const openAt = (id: string, el: Element) => {
+    const top = !el.closest('[data-popover]');
+    if (top) announcePopover(me);
     setOpens((os) =>
-      os.some((o) => o.id === id) ? os : [...os, { id, ...popoverAt(el) }],
+      os.some((o) => o.id === id)
+        ? os
+        : [...(top ? [] : os), { id, ...popoverAt(el) }],
     );
+  };
   const close = (id: string) => setOpens((os) => os.filter((o) => o.id !== id));
   const toggle = (id: string, el: Element) =>
     isOpen(id) ? close(id) : openAt(id, el);

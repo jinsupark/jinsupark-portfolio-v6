@@ -221,7 +221,6 @@ export type Artwork = {
   slug: string;
   title: string;
   about: string;
-  featured: boolean;
   background: string;
   // Bottom to top.
   layers: LayerDoc[];
@@ -444,10 +443,9 @@ export const newArtwork = (slug = 'untitled'): Artwork => ({
   slug,
   title: 'Untitled',
   about: '',
-  featured: false,
   background: '#e3e1dc',
   layers: [],
-  post: { grain: 0.04, grainSize: 1, vignette: 0 },
+  post: { grain: 0, grainSize: 1, vignette: 0 },
 });
 
 export const layerId = () => Math.random().toString(36).slice(2, 9);
@@ -681,46 +679,15 @@ export function upgradeLayer(l: LayerDoc): LayerDoc {
   delete out.edge;
   return out;
 }
-// An artwork in today's form. Its old post processing (grain, vignette)
-// becomes a top layer whose filters work on everything behind it.
+// An artwork in today's form. Old post processing (grain, vignette) is
+// dropped: those are filters now, added where wanted. So is the layer that
+// briefly stood in for it.
 export function upgrade(d: Artwork): Artwork {
-  const layers = d.layers.map(upgradeLayer);
-  const p = d.post ?? { grain: 0, grainSize: 1, vignette: 0 };
-  if (p.grain > 0 || p.vignette > 0) {
-    const filters: FilterDoc[] = [];
-    if (p.grain > 0)
-      filters.push({
-        id: 'post-grain',
-        type: 'grain',
-        visible: true,
-        values: { amount: p.grain, size: p.grainSize },
-        input: 'background',
-      });
-    if (p.vignette > 0)
-      filters.push({
-        id: 'post-vignette',
-        type: 'vignette',
-        visible: true,
-        values: { amount: p.vignette },
-        input: 'background',
-      });
-    layers.push({
-      id: 'post',
-      name: 'Grain & vignette',
-      visible: true,
-      locked: true,
-      frame: fullFrame(sizeOf(d)),
-      opacity: 1,
-      blend: 'normal',
-      mask: { source: null, mode: 'alpha', invert: false },
-      fills: [],
-      filters,
-      strokes: [],
-      shadows: [],
-      outline: [],
-    });
-  }
-  return { ...d, layers, post: { grain: 0, grainSize: 1, vignette: 0 } };
+  return {
+    ...d,
+    layers: d.layers.filter((l) => l.id !== 'post').map(upgradeLayer),
+    post: { grain: 0, grainSize: 1, vignette: 0 },
+  };
 }
 
 // The fill a layer is named and listed by: its topmost one.

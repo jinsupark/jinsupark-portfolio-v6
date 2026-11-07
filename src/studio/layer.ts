@@ -19,6 +19,9 @@ export type LayerFrame = {
   dt: number;
   values: Record<string, unknown>;
   renderer: THREE.WebGLRenderer;
+  // Held still (while something is being dragged): a drawing whose values
+  // and size haven't changed keeps its last frame instead of redrawing.
+  hold?: boolean;
   // For a shape style on a shaped layer: the outline, closed, in this
   // render's units (the frame plus pad, so the outline sits `pad` in).
   outline?: { x: number; y: number }[];
@@ -93,7 +96,7 @@ export function canvasLayer<V>(
         texture.dispose();
         drawn = null;
       }
-      if (still && drawn === values) return;
+      if ((still || frame.hold) && drawn === values) return;
       drawn = values;
       ctx.setTransform(pw / w, 0, 0, ph / h, 0, 0);
       draw(ctx, w, h, dt, values as V, frame);

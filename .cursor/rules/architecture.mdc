@@ -239,7 +239,8 @@ Home with a short about and contact links.
  beside the artwork via `ArtworkPlayer`'s `onBackdrop`) it shows artwork, background and post
  instead. Brush settings sit at its top while smearing.
 - **The studio is meant to stand alone later.** It carries its own type:
- `studio.css` and `studio/fonts/` register Inter as `Studio Inter` on the `.studio` root,
+ `studio.css` and `studio/fonts/` register Geist (Vercel, SIL OFL; `geist-variable.woff2`, with its licence
+ beside it) as `Studio Geist` on the `.studio` root,
  independent of the site's fonts. Keep new studio styling inside `src/studio/`.
 - **The studio has its own light controls**, in `studio/ui.tsx`. They mirror the lab's
  `ControlRows` API (`Section`, `ControlGroups`, `Rows`, `Row`, `IconButton`), so the dark tilde

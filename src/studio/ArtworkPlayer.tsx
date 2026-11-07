@@ -19,6 +19,8 @@ const FPS = 60;
 const SETTLE = 20;
 
 const PAN_SPEED = 2;
+// How long a pan or zoom rests before the artwork is redrawn sharp.
+const SETTLE_MS = 120;
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 32;
@@ -68,6 +70,8 @@ export default function ArtworkPlayer({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [spaceHeld, setSpaceHeld] = useState(false);
+  // Dragging the view (space or middle button): the closed hand.
+  const [panning, setPanning] = useState(false);
   const play = useRef(playing);
   useEffect(() => {
     play.current = playing;
@@ -96,6 +100,45 @@ export default function ArtworkPlayer({
     y: (hostSize.h - size.h * scale) / 2 + pan.y,
   };
 
+  // Panning and zooming move the canvas already drawn (a CSS transform the
+  // browser composites for free) and the overlays at once; the artwork is
+  // drawn afresh at the new view only once the gesture has rested, as Figma
+  // and Framer do. `drawn` is the view the canvas was last drawn at.
+  const [drawn, setDrawn] = useState<{
+    s: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!navigable || !scale) return;
+    const t = setTimeout(
+      () => setDrawn({ s: scale, x: box.x, y: box.y }),
+      SETTLE_MS,
+    );
+    return () => clearTimeout(t);
+  }, [navigable, scale, box.x, box.y]);
+  const at = drawn ?? { s: scale, x: box.x, y: box.y };
+  const k = scale / (at.s || 1);
+  // Mid-gesture nothing is drawn: the frozen frame is moved instead, leaving
+  // the main thread to the input.
+  const moving = k !== 1 || box.x !== at.x || box.y !== at.y;
+  const movingRef = useRef(moving);
+  // A press on the canvas (dragging a layer, a handle or a box) holds the
+  // artwork still until it's released.
+  const holding = useRef(false);
+  useEffect(() => {
+    const up = () => (holding.current = false);
+    addEventListener('pointerup', up);
+    addEventListener('pointercancel', up);
+    return () => {
+      removeEventListener('pointerup', up);
+      removeEventListener('pointercancel', up);
+    };
+  }, []);
+  useEffect(() => {
+    movingRef.current = moving;
+  });
+
   useEffect(() => {
     const c = new Compositor(canvas.current!);
     comp.current = c;
@@ -110,7 +153,19 @@ export default function ArtworkPlayer({
     let settle = SETTLE;
     const frame = (t: number) => {
       raf = requestAnimationFrame(frame);
-      if (!onScreen) return;
+      if (!onScreen || movingRef.current) {
+        last = t;
+        return;
+      }
+      // Mid-drag: draw only when the document changed, with the rest held.
+      c.hold = holding.current;
+      if (holding.current) {
+        last = t;
+        if (!c.dirty) return;
+        c.dirty = false;
+        c.render(0);
+        return;
+      }
       if (play.current) {
         if (t - last < 1000 / FPS - 1) return;
         c.render(Math.min(t - last, 100) / 1000);
@@ -160,10 +215,10 @@ export default function ArtworkPlayer({
     if (!navigable || !scale) return comp.current?.setView(null);
     comp.current?.setView(
       {
-        x: -box.x / scale,
-        y: -box.y / scale,
-        w: hostSize.w / scale,
-        h: hostSize.h / scale,
+        x: -at.x / at.s,
+        y: -at.y / at.s,
+        w: hostSize.w / at.s,
+        h: hostSize.h / at.s,
         rot: 0,
       },
       surround,
@@ -282,9 +337,11 @@ export default function ArtworkPlayer({
     const x0 = e.clientX - pan.x;
     const y0 = e.clientY - pan.y;
     el.setPointerCapture(e.pointerId);
+    setPanning(true);
     const move = (m: PointerEvent) =>
       setPan({ x: m.clientX - x0, y: m.clientY - y0 });
     const end = () => {
+      setPanning(false);
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', end);
     };
@@ -298,12 +355,13 @@ export default function ArtworkPlayer({
     <div
       ref={host}
       className={`relative overflow-hidden ${className}`}
-      style={spaceHeld ? { cursor: 'grab' } : undefined}
+      data-hand={panning ? 'grabbing' : spaceHeld ? 'grab' : undefined}
       onPointerDownCapture={(e) => {
         // Working on the canvas takes the keyboard back from the panel, so
         // tool keys and Space reach it.
         const a = document.activeElement;
         if (a instanceof HTMLElement && a !== document.body) a.blur();
+        if (navigable && e.button === 0 && !spaceHeld) holding.current = true;
         panDrag(e);
       }}
       onPointerDown={(e) => e.target === e.currentTarget && onBackdrop?.()}
@@ -313,7 +371,17 @@ export default function ArtworkPlayer({
         className="pointer-events-none absolute"
         style={
           navigable
-            ? { left: 0, top: 0, width: cw, height: ch }
+            ? {
+                left: 0,
+                top: 0,
+                width: cw,
+                height: ch,
+                transformOrigin: '0 0',
+                transform:
+                  k === 1 && box.x === at.x && box.y === at.y
+                    ? undefined
+                    : `translate(${box.x - at.x * k}px, ${box.y - at.y * k}px) scale(${k})`,
+              }
             : { left: box.x, top: box.y, width: cw, height: ch }
         }
       />

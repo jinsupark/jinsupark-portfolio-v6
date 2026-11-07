@@ -115,6 +115,11 @@ function alignLayers(layers: LayerDoc[], ids: string[], how: string) {
   );
 }
 
+// The page background's default. Set (or left unset) it follows the theme:
+// this grey in light mode, DARK_GREY in dark.
+const DEFAULT_GREY = '#eeeeee';
+const DARK_GREY = '#1a1a1a';
+
 const SHAPE_NAMES: Partial<Record<Tool, string>> = {
   rect: 'Rectangle',
   ellipse: 'Ellipse',
@@ -175,6 +180,23 @@ export default function Studio({ work }: { work?: string }) {
   // the artwork animates (the Animation section; remembered).
   const [zoom, setZoom] = useState(1);
   const [fitAsk, setFitAsk] = useState(0);
+  // Light or dark studio (⇧⌘D), remembered. Only the studio's own UI
+  // changes; the artwork is the artwork.
+  const [dark, setDark] = useState(
+    () => localStorage.getItem('studio:theme') === 'dark',
+  );
+  const toggleDark = () =>
+    setDark((d) => {
+      localStorage.setItem('studio:theme', d ? 'light' : 'dark');
+      return !d;
+    });
+  // The page's background colour: the theme's own grey (light or dark)
+  // unless the artwork sets one, which then holds in both modes.
+  const custom =
+    doc.surround && doc.surround.toLowerCase() !== DEFAULT_GREY
+      ? doc.surround
+      : undefined;
+  const surround = custom ?? (dark ? DARK_GREY : DEFAULT_GREY);
   const [playing, setPlaying] = useState(
     () => localStorage.getItem('studio:play') !== '0',
   );
@@ -200,8 +222,13 @@ export default function Studio({ work }: { work?: string }) {
   const [tool, setTool] = useState<Tool>('select');
   const [brush, setBrush] = useState<Brush>({ size: 60, strength: 0.8 });
 
+  // The draft is saved once edits pause, not on every pointer move of a drag.
   useEffect(() => {
-    localStorage.setItem(draftKey(work), JSON.stringify(doc));
+    const t = setTimeout(
+      () => localStorage.setItem(draftKey(work), JSON.stringify(doc)),
+      250,
+    );
+    return () => clearTimeout(t);
   }, [doc, work]);
 
   const hist = useRef({
@@ -615,6 +642,7 @@ export default function Studio({ work }: { work?: string }) {
         if (k === 'g') return run(e.shiftKey ? ungroup : group);
         if (k === 's') return run(() => void save());
         if (k === 'e' && e.shiftKey) return run(() => void exportAll());
+        if (k === 'd' && e.shiftKey) return run(toggleDark);
         if (k === 'a') return run(() => setSel(doc.layers.map((l) => l.id)));
         if (k === 'd') return run(() => paste(picked));
         if (k === 'c' && picked.length)
@@ -665,6 +693,7 @@ export default function Studio({ work }: { work?: string }) {
 
   return (
     <div
+      data-theme={dark ? 'dark' : 'light'}
       className="studio fixed inset-0 grid bg-neutral-50 text-[11px] text-neutral-800 select-none"
       style={{
         gridTemplateColumns: `${widths.left}px 2.75rem minmax(0,1fr) ${widths.right}px`,
@@ -698,7 +727,6 @@ export default function Studio({ work }: { work?: string }) {
           <ArtworkTitle
             title={doc.title}
             slug={doc.slug}
-            featured={doc.featured}
             current={work ?? ''}
             works={WORKS.map((w) => ({ slug: w.slug, title: w.doc.title }))}
             onRename={(title) =>
@@ -711,10 +739,11 @@ export default function Studio({ work }: { work?: string }) {
               }))
             }
             onSlug={(slug) => setDoc((d) => ({ ...d, slug }))}
-            onFeatured={(featured) => setDoc((d) => ({ ...d, featured }))}
             onOpen={open}
             onNew={startNew}
             onSave={() => void save()}
+            dark={dark}
+            onToggleDark={toggleDark}
             onRevert={work ? revert : undefined}
           />
         </header>
@@ -746,17 +775,14 @@ export default function Studio({ work }: { work?: string }) {
 
       <Toolbar tool={tool} onTool={setTool} />
 
-      <main
-        className="relative min-h-0"
-        style={{ background: doc.surround ?? '#eeeeee' }}
-      >
+      <main className="relative min-h-0" style={{ background: surround }}>
         <ArtworkPlayer
           doc={doc}
           navigable
           playing={playing}
           onZoom={setZoom}
           zoomTo={fitAsk}
-          surround={doc.surround ?? '#eeeeee'}
+          surround={surround}
           className="absolute! inset-0"
           onCompositor={(c) => (comp.current = c)}
           onBackdrop={() => setSelected(null)}
@@ -952,9 +978,17 @@ export default function Studio({ work }: { work?: string }) {
               schema={artworkSchema}
               values={{
                 background: doc.background,
-                surround: doc.surround ?? '#eeeeee',
+                surround: custom ?? DEFAULT_GREY,
               }}
-              onChange={(k, v) => setDoc((d) => ({ ...d, [k]: v as string }))}
+              onChange={(k, v) =>
+                setDoc((d) => ({
+                  ...d,
+                  [k]:
+                    k === 'surround' && String(v).toLowerCase() === DEFAULT_GREY
+                      ? undefined
+                      : (v as string),
+                }))
+              }
             />
             <ExportSection
               exports={doc.exports ?? DEFAULT_EXPORTS}
